@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.conversation.state import ReservationDraft
+from app.core.metrics import reservation_status_changes_total
 from app.db.models import Notification, Reservation, ReservationStatusEnum, Restaurant
 
 
@@ -34,7 +35,9 @@ async def create_reservation_request(
     up and send, which is a real, persisted side effect, not a stub.
     """
     if not draft.is_complete():
-        raise ValueError(f"Cannot create a reservation with missing fields: {draft.missing_fields()}")
+        raise ValueError(
+            f"Cannot create a reservation with missing fields: {draft.missing_fields()}"
+        )
     # draft.is_complete() guarantees these are set — assert narrows the
     # type for the type checker and fails loudly if that invariant is
     # ever violated, rather than passing None through to strptime.
@@ -59,6 +62,7 @@ async def create_reservation_request(
     db.add(reservation)
     await db.flush()
     await db.refresh(reservation)
+    reservation_status_changes_total.labels(status=reservation.status.value).inc()
 
     message = (
         f"New reservation request for {restaurant.name}: {draft.customer_name}, "

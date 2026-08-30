@@ -30,6 +30,7 @@ from app.audio.codec import mulaw_to_pcm16, pcm16_to_mulaw, pcm16_to_wav_bytes, 
 from app.audio.vad import TurnDetector
 from app.conversation.engine import ConversationEngine, TurnResult
 from app.conversation.state import ConversationContext, ConversationState
+from app.core.metrics import active_calls
 from app.db.models import Call, CallOutcomeEnum, Restaurant
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
@@ -77,9 +78,16 @@ class CallSession:
         self.final_outcome = CallOutcomeEnum.UNKNOWN
         self.should_close = False  # set True once a transfer is needed
         self._speaking_until = 0.0  # monotonic timestamp
+        # Tracks whether this session is the one that incremented
+        # active_calls, so end() only ever decrements a gauge this same
+        # instance actually raised — see active_calls' own docstring.
+        self._counted_active = False
 
     async def start(self) -> None:
         """Called once the Media Stream is connected — plays the greeting."""
+        active_calls.inc()
+        self._counted_active = True
+
         greeting = self.restaurant.ai_greeting or (
             f"Thank you for calling {self.restaurant.name}. How can I help you today?"
         )
@@ -177,3 +185,7 @@ class CallSession:
             was_escalated=self.context.transfer_reason == "escalation",
             transcript_text=transcript_text or None,
         )
+
+        if self._counted_active:
+            active_calls.dec()
+            self._counted_active = False

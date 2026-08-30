@@ -1,0 +1,21 @@
+apiVersion: 1
+
+# Auto-provisions the Prometheus datasource on container start —
+# without this, a fresh Grafana has no datasource at all and the
+# provisioned dashboard (see ../dashboards/) can't render anything
+# until someone adds one by hand through the UI.
+datasources:
+  - name: Prometheus
+    type: prometheus
+    # Fixed rather than auto-generated, so the provisioned dashboard
+    # (../dashboards/ai-receptionist-overview.json) can reference this
+    # exact datasource UID in every panel instead of a value that would
+    # otherwise only exist after Grafana generates it at runtime.
+    uid: prometheus_ds
+    access: proxy
+    # "prometheus" resolves via Docker Compose's service DNS — this
+    # only works from inside the same compose network, not if Grafana
+    # is ever run standalone.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

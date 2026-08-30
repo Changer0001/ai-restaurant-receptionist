@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.metrics import notifications_sent_total
 from app.db.models import Notification
 from app.providers.email.base import EmailProvider
 from app.providers.telephony.base import TelephonyProvider
@@ -92,11 +93,17 @@ async def _send_one(
     except Exception as e:
         notification.error_message = str(e)[:2000]
         if notification.attempt_count >= settings.NOTIFICATION_MAX_ATTEMPTS:
+            notifications_sent_total.labels(
+                channel=notification.notification_type, outcome="permanently_failed"
+            ).inc()
             logger.error(
                 f"Notification {notification.id} ({notification.notification_type}) "
                 f"permanently failed after {notification.attempt_count} attempts: {e}"
             )
         else:
+            notifications_sent_total.labels(
+                channel=notification.notification_type, outcome="failed"
+            ).inc()
             logger.warning(
                 f"Notification {notification.id} ({notification.notification_type}) "
                 f"attempt {notification.attempt_count} failed: {e}"
@@ -105,6 +112,9 @@ async def _send_one(
         notification.is_sent = True
         notification.sent_at = datetime.now(timezone.utc)
         notification.error_message = None
+        notifications_sent_total.labels(
+            channel=notification.notification_type, outcome="sent"
+        ).inc()
 
     await db.flush()
 

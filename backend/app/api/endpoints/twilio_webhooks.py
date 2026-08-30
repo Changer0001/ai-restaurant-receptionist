@@ -22,6 +22,7 @@ import logging
 from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.metrics import twilio_signature_failures_total
 from app.db.session import get_db_session
 from app.providers.embedding import get_embedding_provider
 from app.providers.embedding.base import EmbeddingProvider
@@ -73,6 +74,7 @@ async def _validated_form(
     url = str(request.url)
 
     if not await telephony.validate_webhook_signature(signature, url, params):
+        twilio_signature_failures_total.inc()
         logger.warning(f"Rejected Twilio webhook with invalid signature: {url}")
         return None
 
@@ -190,7 +192,9 @@ async def transfer_webhook(
         restaurant = await restaurant_service.get_restaurant_or_404(db, call.restaurant_id)
         transfer_number = restaurant.transfer_number
 
-    return Response(content=build_transfer_or_hangup_twiml(transfer_number), media_type=_XML_MEDIA_TYPE)
+    return Response(
+        content=build_transfer_or_hangup_twiml(transfer_number), media_type=_XML_MEDIA_TYPE
+    )
 
 
 async def _handle_stream_event(

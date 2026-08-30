@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.metrics import call_duration_seconds, calls_total
 from app.db.models import Call, CallEvent, CallOutcomeEnum, CallTranscript
 
 
@@ -168,6 +169,9 @@ async def finalize_call(
     call.was_escalated = was_escalated
     if transcript_text is not None:
         call.transcript = transcript_text
+
+    calls_total.labels(outcome=outcome.value).inc()
+    call_duration_seconds.observe(call.duration_seconds)
 
     await db.flush()
     await db.refresh(call)

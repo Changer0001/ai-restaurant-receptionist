@@ -18,7 +18,10 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # FastAPI backend metrics
+  # FastAPI backend metrics — both the business metrics in
+  # app/core/metrics.py (calls, reservations, notifications, signature
+  # failures) and prometheus_client's own auto-registered
+  # process/platform metrics.
   - job_name: 'api'
     static_configs:
       - targets: ['api:8000']
@@ -26,16 +29,12 @@ scrape_configs:
     scrape_interval: 10s
     scrape_timeout: 5s
 
-  # Node exporter (optional, for system metrics)
-  - job_name: 'node'
-    static_configs:
-      - targets: ['localhost:9100']
-    metrics_path: '/metrics'
-    scrape_interval: 15s
-
-  # PostgreSQL (via pg_exporter, optional)
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['localhost:9187']
-    metrics_path: '/metrics'
-    scrape_interval: 15s
+  # Host/container-level (node_exporter) and PostgreSQL
+  # (postgres_exporter) metrics are NOT wired up: docker-compose.yml
+  # doesn't run either exporter, so `targets: ['localhost:9100']` /
+  # `['localhost:9187']` here would resolve to the Prometheus
+  # container's own loopback (not the host, and not another compose
+  # service — container networking doesn't work that way) and sit
+  # permanently "down," which is worse than not scraping them at all.
+  # See docs/roadmap.md for what adding the real exporter containers
+  # would take.

@@ -607,6 +607,55 @@ docs/roadmap.md's "No manual reservation creation" entry for the one
 legitimate case (a walk-in, or a call the AI didn't handle) this
 currently can't cover.
 
+### Why no `restaurant_id` label on any Prometheus metric
+
+`app/core/metrics.py`'s business metrics (`calls_total`,
+`reservation_status_changes_total`, `notifications_sent_total`, ...)
+are labeled by outcome/status/channel, never by `restaurant_id`, even
+though every one of them is emitted from code that has the restaurant
+in scope at that point. Prometheus's own data model expects label
+*values* to come from a small, bounded set — every distinct label
+value combination is its own stored time series. A restaurant_id label
+would mean the number of series for every single metric grows by one
+for every restaurant this system ever onboards, forever, with no
+bound — the canonical Prometheus cardinality trap, and exactly the
+kind of metric design that looks fine in development with two test
+restaurants and then falls over (slow queries, high memory use, or
+literal ingestion limits) the first time a real multi-tenant deployment
+has dozens or hundreds of them.
+
+Per-restaurant numbers are exactly what the database plus the Phase 8
+admin API/dashboard are for — a restaurant owner viewing their own call
+history and reservation queue already gets exact, real-time,
+un-aggregated counts scoped correctly to their own tenant (and nothing
+else, per the tenant-isolation dependencies in `app/api/deps.py`).
+Prometheus/Grafana here answer a different question — "how is the
+*system* behaving in aggregate" (is the whole notification pipeline
+healthy, is call volume trending up, is something rejecting a lot of
+webhook signatures) — which is exactly what its low-cardinality,
+system-wide metrics are for.
+
+### Why metrics are instrumented at the shared choke point, not every call site
+
+Each business metric is incremented from exactly one function that
+every relevant code path already funnels through, rather than from
+every place that *could* plausibly trigger it. `calls_total`/
+`call_duration_seconds` live in `call_service.finalize_call()` — both
+the normal end-of-call path (`CallSession.end()`) and the abnormal-
+disconnect backstop (`ensure_call_finalized_from_status()`, Phase 5)
+call this one function, so instrumenting it once covers both without
+duplicating the increment (and risking the two paths drifting out of
+sync) at each call site. The same reasoning applies to
+`reservation_status_changes_total` (both reservation creation and the
+admin API's status-update endpoint funnel through their own single
+function) and `notifications_sent_total` (the one `_send_one()` every
+worker iteration calls). Finding the actual shared choke point for each
+metric, rather than sprinkling `.inc()` calls at every apparent trigger
+site, is what keeps a metric trustworthy as new code paths get added
+later — a new way to finalize a call automatically gets counted
+correctly for free, rather than silently under-counting until someone
+remembers to add the same `.inc()` call there too.
+
 ---
 
 For implementation details, see:

@@ -16,6 +16,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.metrics import reservation_status_changes_total
 from app.db.models import Reservation, ReservationStatusEnum
 
 
@@ -57,4 +58,5 @@ async def update_reservation_status(
     reservation.status = new_status
     await db.flush()
     await db.refresh(reservation)
+    reservation_status_changes_total.labels(status=reservation.status.value).inc()
     return reservation

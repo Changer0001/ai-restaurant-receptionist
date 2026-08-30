@@ -1,13 +1,14 @@
 # Development Status
 
-**Phases 1–6 and 8 complete.** Foundation, restaurant management API,
+**Phases 1–6 and 8–9 complete.** Foundation, restaurant management API,
 RAG knowledge base, the AI conversation engine, voice (Twilio + local
 STT/TTS wired into a live call), notification delivery (a standalone
-worker that actually sends the SMS/email Phase 4 already queues), and
-now the React admin dashboard are built, tested, and verified. Phase 7
+worker that actually sends the SMS/email Phase 4 already queues), the
+React admin dashboard, and now real Prometheus business metrics +
+provisioned Grafana dashboards are built, tested, and verified. Phase 7
 (live-call transfer) was already completed as part of Phase 5 — see
-that section below. Phase 9 (Prometheus business metrics / Grafana
-dashboards) is next.
+that section below. Phase 10 (production hardening: backups, rate
+limiting, secret rotation, disaster recovery docs) is next.
 
 ## ✅ Phase 1 — Foundation
 
@@ -290,9 +291,56 @@ throwaway Python 3.12 venv, then confirming a real, complete
 end-to-end on Python 3.11 and the full test suite still passes against
 that fresh install.
 
+## ✅ Phase 9 — Observability: Business Metrics + Grafana
+
+- `app/core/metrics.py` — real Prometheus metrics with actual call
+  sites, on top of the process/platform metrics Phase 1's `/metrics`
+  mount already exposed for free: `calls_total{outcome}` and
+  `call_duration_seconds` (`call_service.finalize_call`, so both the
+  normal end-of-call path and the abnormal-disconnect status-webhook
+  backstop are covered by the one function both funnel through);
+  `active_calls` (`CallSession.start()`/`end()` — a live count of
+  in-progress calls, guarded against ever going negative if `end()`
+  runs without a matching `start()`); `reservation_status_changes_total
+  {status}` (reservation creation and every later status update);
+  `notifications_sent_total{channel,outcome}` (sent / failed /
+  permanently_failed, from the notification worker); and
+  `twilio_signature_failures_total` (the entire auth boundary for the
+  Twilio webhook router — worth graphing, not just logging)
+- Deliberately no `restaurant_id` label anywhere — a documented
+  cardinality decision (see docs/architecture.md): per-restaurant
+  numbers belong in the database/admin dashboard, not as unbounded
+  Prometheus label values in a multi-tenant deployment
+- `infrastructure/grafana/provisioning/datasources/datasource.yml`
+  (new) — Grafana had no datasource provisioned at all before this;
+  Phase 1's dashboard *provider* config existed but pointed at an
+  empty folder with nothing to render
+- `infrastructure/grafana/provisioning/dashboards/ai-receptionist-
+  overview.json` (new) — a real 7-panel dashboard (active calls, call
+  volume by outcome, call duration percentiles, reservation status
+  changes, notification outcomes, signature failures) querying the
+  metrics above
+- `infrastructure/prometheus/prometheus.yml` — removed the `node`/
+  `postgres` exporter scrape jobs: no such exporter containers exist in
+  `docker-compose.yml`, and `targets: ['localhost:9100']` inside the
+  Prometheus container's own network namespace never resolved to
+  anything real — those jobs would sit permanently "down" forever,
+  which is worse than not scraping them at all. See docs/roadmap.md.
+
+**Not independently verified in this sandbox**: actually rendering the
+provisioned Grafana dashboard. Docker image pulls are blocked here (the
+same constraint noted for Phase 5's docker-compose verification), so
+this wasn't checked in a live Grafana instance — only that the JSON is
+syntactically valid and structurally consistent (`python -m json.tool`,
+a grid-position/panel-count check) and that the metrics it queries are
+real, tested, application-level Prometheus metrics with the exact names
+and label sets the dashboard's queries assume. The business-metrics
+instrumentation itself (the part that can be tested without Docker) is
+fully covered by `tests/test_metrics.py`.
+
 ## Test Suite
 
-**198 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
+**206 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
 `app/` and `tests/`. Runs entirely against in-memory SQLite (via
 `StaticPool`), an isolated in-memory ChromaDB per test (unique
 collection name per test — see the note in `conftest.py`'s `vector_db`
@@ -355,6 +403,20 @@ cross-tenant reservation. The frontend has no automated test suite
 — `tsc --noEmit`, `eslint`, and `vite build` all passing cleanly is
 the frontend's equivalent gate, backed by the one-time Playwright
 walkthrough described above for actual runtime behavior.
+
+Phase 9 additionally covers: every business metric's real call site
+actually updates it — `calls_total`/`call_duration_seconds` via
+`finalize_call`, `active_calls` incrementing on `start()` and
+decrementing on `end()` (and never going negative when `end()` runs
+without a matching `start()`), reservation creation and status updates
+each landing in `reservation_status_changes_total` under the right
+label, notification success/failure/permanent-failure each landing in
+`notifications_sent_total` under the right outcome, and an invalid
+Twilio signature incrementing `twilio_signature_failures_total`. Every
+assertion reads the metric's own value via `prometheus_client`'s public
+`.collect()` API as a *delta* (before vs. after the operation under
+test) rather than an absolute value, since the metrics registry is a
+process-wide singleton shared across the whole test run.
 
 ## Bugs Fixed Along the Way
 
@@ -430,8 +492,6 @@ docs/roadmap.md).
 
 ## Not Yet Built (By Design — Later Phases)
 
-- Prometheus business metrics, Grafana dashboards beyond the Phase 1
-  scaffolding (Phase 9)
 - Production hardening: backups, rate limiting, secret rotation,
   disaster recovery docs (Phase 10)
 
@@ -497,6 +557,9 @@ npm run build
 - `frontend/src/api/client.ts` — axios instance, auth-refresh
   interceptor
 - `frontend/src/auth/AuthContext.tsx` — login/register/session state
+- `backend/app/core/metrics.py` — Prometheus business metrics
+- `infrastructure/grafana/provisioning/dashboards/ai-receptionist-
+  overview.json` — the provisioned Grafana dashboard
 - `docker-compose.yml` — full local stack
 - `docs/architecture.md` — system design and decision log
 - `docs/roadmap.md` — documented gaps and future work

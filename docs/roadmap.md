@@ -139,6 +139,37 @@ call. Adding a `POST /api/restaurants/{id}/reservations` plus a "New
 Reservation" form would close this without touching the conversation
 engine's own reservation-creation path.
 
+### No infrastructure-level metrics (host, PostgreSQL)
+
+`app/core/metrics.py` covers application/business metrics (calls,
+reservations, notifications, signature failures), but there's no
+`node_exporter` (host CPU/memory/disk) or `postgres_exporter`
+(connection pool, query latency, replication lag) container in
+`docker-compose.yml` — `infrastructure/prometheus/prometheus.yml`'s
+scrape config for both was removed in Phase 9 rather than left pointing
+at nonexistent targets (see that phase's notes in
+DEVELOPMENT_STATUS.md). Both are standard, well-documented images
+(`prom/node-exporter`, `prometheuscommunity/postgres-exporter`) with a
+small, well-known configuration surface — adding them is a
+docker-compose service + a `DATA_SOURCE_NAME` connection string for
+Postgres, plus re-adding their scrape jobs to `prometheus.yml` pointing
+at the real service names.
+
+### Grafana dashboard not rendered in a live instance
+
+`infrastructure/grafana/provisioning/dashboards/ai-receptionist-
+overview.json` was written to Grafana's documented dashboard-JSON
+schema and validated for syntactic correctness and internally
+consistent panel/grid layout, but never actually loaded into a running
+Grafana to confirm it renders as intended — Docker image pulls aren't
+reachable in the sandbox this was built in (see Phase 5's/Phase 9's
+notes on the same constraint). The metrics it queries are real and
+covered by `tests/test_metrics.py`; what's unverified is Grafana's own
+rendering of the dashboard JSON. Worth a quick visual check
+(`docker compose up -d prometheus grafana`, http://localhost:3000,
+default login admin/admin) the first time this actually runs somewhere
+with registry access.
+
 ### Reservation availability
 
 Reservations created by this system are *requests*, not confirmed
