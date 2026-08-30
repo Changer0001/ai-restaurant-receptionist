@@ -61,3 +61,31 @@ async def get_restaurant_by_phone_number(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_active_phone_number_for_restaurant(
+    db: AsyncSession, restaurant_id: str
+) -> Optional[str]:
+    """
+    The Twilio number this restaurant receives calls on — used as the
+    "From" number when sending it an outbound SMS notification (see
+    notification_service.py), so the text arrives from the same number
+    its own AI receptionist answers calls on rather than a generic
+    system-wide sender.
+
+    Returns None if the restaurant has no active Twilio number
+    configured — shouldn't normally happen for a restaurant that's
+    actually taking calls, but a misconfigured or deactivated one has
+    no number to send from, and the caller must treat that as "cannot
+    send this SMS" rather than guessing a number.
+    """
+    result = await db.execute(
+        select(RestaurantPhoneNumber.phone_number)
+        .where(
+            RestaurantPhoneNumber.restaurant_id == restaurant_id,
+            RestaurantPhoneNumber.is_active.is_(True),
+        )
+        .order_by(RestaurantPhoneNumber.created_at)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()

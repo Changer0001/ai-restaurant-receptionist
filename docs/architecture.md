@@ -521,6 +521,46 @@ specifically to catch a validator that accepts more than it should —
 which is exactly what shipped in Phase 1 before this was fixed (see
 DEVELOPMENT_STATUS.md).
 
+### Why the notification worker is a separate process, not inline in the call
+
+Phase 4's `create_reservation_request` queues `Notification` rows the
+instant a reservation is created; Phase 6's `app/worker.py` is a
+completely separate long-running process (`docker-compose.yml`'s
+`worker` service) that polls for and sends them, rather than the live
+call's own code path sending them immediately. This mirrors the same
+reasoning as local-first AI inference generally: a live phone call has
+a tight latency budget (see "Performance Considerations" below), and
+sending an SMS/email involves a synchronous round trip to an external
+service (Twilio's REST API, an SMTP server) that has no bearing on the
+call itself — a caller who just asked for a reservation shouldn't wait
+an extra few hundred milliseconds (or, if SMTP is down and retrying,
+much longer) for the AI to speak its next line just because the owner
+notification happens to be slow.
+
+The tradeoff is that a notification lags real time by up to
+`NOTIFICATION_POLL_INTERVAL_SECONDS` (15s by default) — acceptable
+here since these are best-effort owner-facing notifications about a
+*request*, not anything the caller is waiting on synchronously. Retry
+state (`attempt_count`, backoff computed from `updated_at`) lives on
+the `Notification` row itself rather than in the worker process, so
+the worker is fully stateless and can be restarted, scaled to multiple
+replicas, or moved to a different host without losing track of what
+still needs sending or re-sending a row mid-backoff.
+
+### Why SMS notifications are sent "from" the restaurant's own Twilio number
+
+`notification_service._send_one` resolves the outbound SMS "from"
+number via `restaurant_service.get_active_phone_number_for_restaurant`
+— the same Twilio number the restaurant's AI receptionist answers
+calls on — rather than a single system-wide sending number. Two
+reasons: it's a number this Twilio account already owns and is
+authorized to send from (no separate SMS-sending number needs to be
+provisioned per restaurant), and the restaurant owner receiving "New
+reservation request..." recognizes it as coming from their own AI
+receptionist's number rather than an unfamiliar shared one — relevant
+for a multi-tenant deployment where many unrelated restaurants' owners
+would otherwise all see texts from the exact same sender.
+
 ---
 
 For implementation details, see:

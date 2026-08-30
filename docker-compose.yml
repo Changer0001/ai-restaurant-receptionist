@@ -162,6 +162,33 @@ services:
       "
 
   # ============================================================================
+  # NOTIFICATION WORKER
+  # ============================================================================
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: restaurant_ai_worker
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://restaurantai:restaurantai@postgres:5432/restaurantai
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+    # No GPU reservation, no dependency on chromadb/ollama: this process
+    # only sends the SMS/email notifications app/conversation/tools.py
+    # already queued as Notification rows — it never touches AI
+    # inference, so it doesn't need (or wait on) the services that do.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    networks:
+      - app-network
+    command: python -m app.worker
+
+  # ============================================================================
   # MONITORING
   # ============================================================================
 

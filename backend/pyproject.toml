@@ -108,6 +108,16 @@ dev = [
     "types-redis==4.6.0.11",
     "types-aiofiles==23.2.0",
     "httpx[cli]==0.25.1",
+    # The async SQLite driver every test's db_engine fixture uses
+    # (sqlite+aiosqlite:///:memory:) — test-only, never used in
+    # production (which always talks to Postgres via asyncpg), so it
+    # belongs here rather than in the main dependency list. Found
+    # missing entirely: it was already installed in this project's dev
+    # environment from some earlier ad hoc `pip install`, which is the
+    # only reason `pytest` had been passing at all — a genuinely clean
+    # `pip install -e ".[dev]"` would have failed to even import the
+    # test suite's own fixtures.
+    "aiosqlite==0.22.1",
 ]
 
 [tool.pytest.ini_options]

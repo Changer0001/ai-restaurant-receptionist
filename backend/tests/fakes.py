@@ -17,9 +17,11 @@ from typing import Callable, Union
 
 import numpy as np
 
+from app.providers.email.base import EmailProvider
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
 from app.providers.stt.base import STTProvider
+from app.providers.telephony.base import TelephonyProvider
 from app.providers.tts.base import TTSProvider
 
 _DIMENSIONS = 32
@@ -151,3 +153,60 @@ class FakeTTSProvider(TTSProvider):
 
     async def health_check(self) -> bool:
         return True
+
+
+class FakeEmailProvider(EmailProvider):
+    """
+    Stands in for SMTPEmailProvider in notification-service tests.
+    Records every successful send in `.sent`; recipients listed in
+    `fail_for` raise instead, for exercising the worker's
+    failure/retry/backoff handling without a real SMTP server.
+    """
+
+    def __init__(self, fail_for: set[str] | None = None):
+        self.sent: list[tuple[str, str, str]] = []
+        self._fail_for = fail_for or set()
+
+    async def send_email(self, to: str, subject: str, body: str) -> None:
+        if to in self._fail_for:
+            raise RuntimeError(f"simulated SMTP failure for {to}")
+        self.sent.append((to, subject, body))
+
+    async def health_check(self) -> bool:
+        return True
+
+
+class FakeTelephonyProvider(TelephonyProvider):
+    """
+    Stands in for TwilioTelephonyProvider in notification-service tests
+    — only send_sms is exercised there; the rest of the interface is
+    stubbed just enough to satisfy the abstract base class.
+    """
+
+    def __init__(self, fail_for: set[str] | None = None):
+        self.sent_sms: list[tuple[str, str, str]] = []
+        self._fail_for = fail_for or set()
+
+    async def validate_webhook_signature(self, signature: str, url: str, params) -> bool:
+        return True
+
+    async def transfer_call(self, call_sid: str, target_number: str, timeout: int = 30) -> dict:
+        return {}
+
+    async def end_call(self, call_sid: str) -> bool:
+        return True
+
+    async def send_digits(self, call_sid: str, digits: str) -> bool:
+        return True
+
+    async def record_call(self, call_sid: str) -> str:
+        return call_sid
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def send_sms(self, to: str, from_: str, body: str) -> dict:
+        if to in self._fail_for:
+            raise RuntimeError(f"simulated Twilio failure for {to}")
+        self.sent_sms.append((to, from_, body))
+        return {"sid": "SMfake", "status": "queued"}

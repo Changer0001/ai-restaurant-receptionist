@@ -4,6 +4,7 @@ Twilio Telephony Provider
 Integration with Twilio Voice API for PSTN connectivity.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Mapping
 
@@ -128,3 +129,22 @@ class TwilioTelephonyProvider(TelephonyProvider):
         except Exception as e:
             logger.error(f"Twilio health check failed: {e}")
             return False
+
+    def _create_message_sync(self, to: str, from_: str, body: str) -> Any:
+        return self.client.messages.create(to=to, from_=from_, body=body)
+
+    async def send_sms(self, to: str, from_: str, body: str) -> Dict[str, Any]:
+        """
+        Send an SMS via Twilio's REST API.
+
+        The Twilio SDK's Client is synchronous (requests-based), not
+        async — messages.create() is a blocking network call, so it runs
+        in a worker thread rather than being awaited directly. This is
+        only ever called from the notification worker's own poll loop
+        (see app/services/notification_service.py), never from a live
+        call's request/response cycle, so its latency doesn't affect
+        call responsiveness — but it would still block the whole
+        process's event loop without to_thread.
+        """
+        message = await asyncio.to_thread(self._create_message_sync, to, from_, body)
+        return {"sid": message.sid, "status": message.status}

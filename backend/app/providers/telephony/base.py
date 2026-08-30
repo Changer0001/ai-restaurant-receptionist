@@ -80,3 +80,25 @@ class TelephonyProvider(ABC):
     async def health_check(self) -> bool:
         """Check if the telephony provider is accessible."""
         pass
+
+    @abstractmethod
+    async def send_sms(self, to: str, from_: str, body: str) -> Dict[str, Any]:
+        """
+        Send an SMS message.
+
+        Args:
+            to: Destination phone number (E.164)
+            from_: Sending phone number — a number this account actually
+                owns/controls (e.g. the restaurant's own Twilio number)
+            body: Message text
+
+        Returns:
+            Provider-specific send result details (message SID, status)
+
+        Raises:
+            Exception: on any failure to send — callers (the notification
+                worker) are expected to catch this and record it rather
+                than have it propagate, since a single bad number/SMTP
+                outage must never crash the whole notification sweep.
+        """
+        pass

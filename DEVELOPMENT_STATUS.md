@@ -1,10 +1,12 @@
 # Development Status
 
-**Phases 1–5 complete.** Foundation, restaurant management API, RAG
-knowledge base, the AI conversation engine, and now voice (Twilio +
-local STT/TTS wired into a live call) are built, tested, and verified.
-Phase 6 (actually sending the SMS/email notifications already queued)
-is next.
+**Phases 1–6 complete.** Foundation, restaurant management API, RAG
+knowledge base, the AI conversation engine, voice (Twilio + local
+STT/TTS wired into a live call), and now notification delivery (a
+standalone worker that actually sends the SMS/email Phase 4 already
+queues) are built, tested, and verified. Phase 7 (live-call transfer)
+was already completed as part of Phase 5 — see that section below — so
+Phase 8 (the React admin dashboard) is next.
 
 ## ✅ Phase 1 — Foundation
 
@@ -142,9 +144,54 @@ is next.
   scheme Twilio actually signed against rather than Nginx's internal
   `http://` connection to the API
 
+## ✅ Phase 6 — Notification Delivery
+
+- `app/worker.py` — a standalone process (`docker-compose.yml`'s new
+  `worker` service, `python -m app.worker`) that polls the
+  `notifications` table and sends due, unsent rows. Runs out-of-process
+  from the API server on purpose: notification delivery has nothing to
+  do with a phone call's latency budget, and a slow/down SMTP server or
+  Twilio outage must never add delay to what a caller hears
+- `app/services/notification_service.py` — the actual send/retry logic
+  the worker loops on: dispatches by `notification_type` ("sms"/"email"),
+  and on failure retries with capped exponential backoff
+  (`NOTIFICATION_BACKOFF_BASE_SECONDS`/`_MAX_SECONDS`) up to
+  `NOTIFICATION_MAX_ATTEMPTS`, after which a row is left permanently
+  unsent with `error_message` set — for a human to notice, never
+  silently dropped. Respects the (previously dead, never-wired)
+  `FEATURE_SMS_NOTIFICATIONS`/`FEATURE_EMAIL_NOTIFICATIONS` flags: a
+  disabled channel's rows are left completely untouched, not counted as
+  failed attempts, so re-enabling it later picks them up unchanged
+- `TelephonyProvider.send_sms()` (new interface method) /
+  `TwilioTelephonyProvider.send_sms()` — real SMS sending via Twilio's
+  REST API (`client.messages.create`), run in a worker thread since the
+  Twilio SDK's client is synchronous, not the async pattern the rest of
+  this codebase uses
+- `app/providers/email/` (new provider abstraction) — `EmailProvider` +
+  `SMTPEmailProvider`, real SMTP sending via `aiosmtplib` (a genuinely
+  async SMTP client), configured from the SMTP_* settings that already
+  existed but were never wired to anything. Handles both STARTTLS
+  (port 587, the default) and implicit TLS (port 465)
+- `restaurant_service.get_active_phone_number_for_restaurant()` — an
+  outbound SMS notification is sent "from" the restaurant's own active
+  Twilio number, so it arrives from the same number the AI receptionist
+  answers calls on, not a generic system-wide sender
+- `/ready` now also checks SMTP reachability (skipped entirely if
+  `FEATURE_EMAIL_NOTIFICATIONS` is off, so an operator who hasn't
+  configured email notifications doesn't get a flapping readiness check
+  for a server they never set up)
+- New `Notification.attempt_count` column (migration
+  `a1b2c3d4e5f6`, verified upgrade → downgrade → re-upgrade against a
+  throwaway SQLite database — no live Postgres was reachable in this
+  sandbox to run it against directly, the same verification Phase 2's
+  migration got) — bounds the retry loop; `updated_at`
+  (already bumped on every write by `TimestampMixin`) doubles as "last
+  attempted at" for computing backoff, so no second timestamp column
+  was needed
+
 ## Test Suite
 
-**159 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
+**189 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
 `app/` and `tests/`. Runs entirely against in-memory SQLite (via
 `StaticPool`), an isolated in-memory ChromaDB per test (unique
 collection name per test — see the note in `conftest.py`'s `vector_db`
@@ -181,6 +228,22 @@ and an end-to-end test that drives the actual
 `/media-stream/{call_sid}` WebSocket protocol (connect → start → real
 μ-law audio frames → stop) and verifies both the audio returned over
 the wire and the `Call` row's final state in the database.
+
+Phase 6 additionally covers: sending a due SMS/email notification,
+already-sent rows being skipped, a failed send recording its error and
+incrementing `attempt_count`, backoff timing (a row still inside its
+window is left alone; one past it is retried), permanent failure after
+`NOTIFICATION_MAX_ATTEMPTS` (and no further attempts after that),
+resolving the right "from" number for SMS (including the case where a
+restaurant has none configured), each disabled-channel feature flag
+leaving its rows completely untouched, an unrecognized
+`notification_type` failing visibly rather than crashing the sweep,
+processing several due notifications in one pass, `TwilioTelephonyProvider.
+send_sms()` against a mocked Twilio client (success and failure),
+`SMTPEmailProvider` (message construction, STARTTLS vs. implicit-TLS
+port selection, credential-less sending, health check), and the
+worker's `run_once()` end to end against the real notification-service
+wiring with fake providers substituted in.
 
 ## Bugs Fixed Along the Way
 
@@ -237,10 +300,25 @@ meaning the model's own history-aware prompts had no idea a greeting
 had been spoken; found via a failing test, fixed by recording it in
 both places.
 
+Found during Phase 6: `aiosqlite` — the async SQLite driver every
+test's `db_engine` fixture actually depends on
+(`sqlite+aiosqlite:///:memory:`) — was never declared as a dependency
+anywhere in `pyproject.toml`, in the main list or the `dev` extra. It
+only "worked" because some earlier ad hoc `pip install` had left it
+sitting in this project's dev environment; a genuinely clean
+`pip install -e ".[dev]"` on a fresh machine would have failed to even
+import the test suite's own fixtures. Added to the `dev` extra, pinned
+to the version already verified working. Also found:
+`FEATURE_SMS_NOTIFICATIONS`/`FEATURE_EMAIL_NOTIFICATIONS` and
+`TelephonyProvider.health_check()` all existed since Phase 1 but were
+never referenced by any code path — the feature flags are now honored
+by `notification_service.process_pending_notifications()`, and an
+analogous SMTP health check was added to `/ready` for the new email
+provider (Twilio's own `health_check()` remains unused — see
+docs/roadmap.md).
+
 ## Not Yet Built (By Design — Later Phases)
 
-- Actually sending the SMS/email notifications Phase 4 already queues,
-  plus a proper background worker for them (Phase 6)
 - React admin dashboard beyond the Phase 1 skeleton (Phase 8)
 - Prometheus business metrics, Grafana dashboards beyond the Phase 1
   scaffolding (Phase 9)
@@ -280,6 +358,9 @@ mypy app/
 - `backend/app/api/endpoints/twilio_webhooks.py` — Twilio HTTP webhooks
   and the Media Streams WebSocket
 - `backend/app/audio/codec.py` — the G.711 μ-law codec
+- `backend/app/worker.py` — the standalone notification-sending worker
+- `backend/app/services/notification_service.py` — notification
+  dispatch, retry, and backoff logic
 - `docker-compose.yml` — full local stack
 - `docs/architecture.md` — system design and decision log
 - `docs/roadmap.md` — documented gaps and future work

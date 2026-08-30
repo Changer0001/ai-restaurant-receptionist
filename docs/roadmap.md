@@ -67,6 +67,41 @@ deliberate MVP scope-down — implementing it is straightforward
 event instead of a timestamp) but barge-in itself (interrupting speech
 that's already mid-flight) is a larger feature.
 
+### No visibility into permanently-failed notifications
+
+Once a `Notification` row exhausts `NOTIFICATION_MAX_ATTEMPTS` (see
+app/services/notification_service.py), it's left unsent with
+`error_message` describing the last failure — safe (nothing is
+silently dropped or endlessly retried), but there's no admin-facing way
+to see that a restaurant owner never actually got told about a
+reservation request short of querying the database directly. A restaurant
+whose SMTP credentials expire, or whose Twilio number gets deactivated,
+would have every notification quietly pile up unsent with no one
+notified about the notifications themselves.
+
+**To close the gap:** a `GET /api/restaurants/{id}/notifications`
+endpoint (or a section of the Phase 8 admin dashboard) surfacing
+`is_sent=False AND attempt_count >= NOTIFICATION_MAX_ATTEMPTS` rows,
+and/or an operator-facing alert (e.g. a periodic count of permanently-
+failed notifications fed into Prometheus/Grafana, Phase 9) rather than
+requiring someone to think to look.
+
+### Twilio's own call-control methods are unused
+
+`TwilioTelephonyProvider.transfer_call()`, `end_call()`, `send_digits()`,
+`record_call()`, and `health_check()` (all from Phase 1) are never
+actually called anywhere in this codebase — live-call transfer works
+entirely through TwiML (`CallSession` closes the Media Stream, Twilio's
+own `<Connect>` → `<Redirect>` → `<Dial>` flow takes over; see
+docs/architecture.md), not through Twilio's REST API. These methods are
+also still synchronous Twilio SDK calls not wrapped in
+`asyncio.to_thread` the way the new `send_sms()` is — the same blocking-
+the-event-loop bug class Phase 5 fixed in `FasterWhisperSTTProvider`,
+just never triggered because nothing calls them. Not fixed now because
+fixing untested, unreachable code adds risk without a way to verify the
+fix; worth cleaning up (or removing, if genuinely never needed) the
+next time any of them gains a real caller.
+
 ### Reservation availability
 
 Reservations created by this system are *requests*, not confirmed

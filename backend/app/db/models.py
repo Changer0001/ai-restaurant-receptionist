@@ -35,6 +35,7 @@ from app.db.base import BaseModel, TenantModel
 
 class UserRoleEnum(str, Enum):
     """User role types."""
+
     PLATFORM_ADMIN = "platform_admin"
     RESTAURANT_OWNER = "restaurant_owner"
     RESTAURANT_MANAGER = "restaurant_manager"
@@ -43,6 +44,7 @@ class UserRoleEnum(str, Enum):
 
 class ReservationStatusEnum(str, Enum):
     """Reservation status types."""
+
     PENDING = "pending"
     CONFIRMED = "confirmed"
     DECLINED = "declined"
@@ -53,6 +55,7 @@ class ReservationStatusEnum(str, Enum):
 
 class CallOutcomeEnum(str, Enum):
     """Call outcome types."""
+
     FAQ_ANSWERED = "faq_answered"
     RESERVATION_CREATED = "reservation_created"
     CALL_TRANSFERRED = "call_transferred"
@@ -142,9 +145,7 @@ class RestaurantPhoneNumber(TenantModel):
     # Relationships
     restaurant = relationship("Restaurant", back_populates="phone_numbers")
 
-    __table_args__ = (
-        Index("idx_phone_restaurant_id", "restaurant_id"),
-    )
+    __table_args__ = (Index("idx_phone_restaurant_id", "restaurant_id"),)
 
 
 class RestaurantHours(TenantModel):
@@ -179,9 +180,7 @@ class RestaurantFAQ(TenantModel):
     # Relationships
     restaurant = relationship("Restaurant", back_populates="faqs")
 
-    __table_args__ = (
-        Index("idx_faq_restaurant_category", "restaurant_id", "category"),
-    )
+    __table_args__ = (Index("idx_faq_restaurant_category", "restaurant_id", "category"),)
 
 
 class RestaurantKnowledgeDocument(TenantModel):
@@ -205,9 +204,7 @@ class RestaurantKnowledgeDocument(TenantModel):
         persisted column — derived from vector_ids for API responses."""
         return len(self.vector_ids or [])
 
-    __table_args__ = (
-        Index("idx_doc_restaurant_type", "restaurant_id", "document_type"),
-    )
+    __table_args__ = (Index("idx_doc_restaurant_type", "restaurant_id", "document_type"),)
 
 
 # ============================================================================
@@ -257,7 +254,9 @@ class Reservation(TenantModel):
     customer_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     customer_phone: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     customer_email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
-    reservation_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    reservation_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     reservation_time: Mapped[str] = mapped_column(String(5), nullable=False)  # HH:MM
     party_size: Mapped[int] = mapped_column(Integer, nullable=False)
     special_notes: Mapped[Optional[str]] = mapped_column(Text)
@@ -291,7 +290,9 @@ class Call(TenantModel):
     call_sid: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
     caller_number: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     called_number: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     outcome: Mapped[CallOutcomeEnum] = mapped_column(
@@ -313,9 +314,7 @@ class Call(TenantModel):
     transcripts = relationship(
         "CallTranscript", back_populates="call", cascade="all, delete-orphan"
     )
-    events = relationship(
-        "CallEvent", back_populates="call", cascade="all, delete-orphan"
-    )
+    events = relationship("CallEvent", back_populates="call", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_call_restaurant_time", "restaurant_id", "start_time"),
@@ -328,7 +327,9 @@ class CallTranscript(TenantModel):
 
     __tablename__ = "call_transcripts"
 
-    call_id: Mapped[str] = mapped_column(String(36), ForeignKey("calls.id"), nullable=False, index=True)
+    call_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("calls.id"), nullable=False, index=True
+    )
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # "caller" or "assistant"
     message: Mapped[str] = mapped_column(Text, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -337,9 +338,7 @@ class CallTranscript(TenantModel):
     # Relationships
     call = relationship("Call", back_populates="transcripts")
 
-    __table_args__ = (
-        Index("idx_transcript_call_time", "call_id", "timestamp"),
-    )
+    __table_args__ = (Index("idx_transcript_call_time", "call_id", "timestamp"),)
 
 
 class CallEvent(TenantModel):
@@ -347,7 +346,9 @@ class CallEvent(TenantModel):
 
     __tablename__ = "call_events"
 
-    call_id: Mapped[str] = mapped_column(String(36), ForeignKey("calls.id"), nullable=False, index=True)
+    call_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("calls.id"), nullable=False, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     event_data: Mapped[Optional[dict]] = mapped_column(JSON)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -372,13 +373,21 @@ class Notification(TenantModel):
     __tablename__ = "notifications"
 
     user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
-    notification_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # sms, email, etc.
+    notification_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, index=True
+    )  # sms, email, etc.
     recipient: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     subject: Mapped[Optional[str]] = mapped_column(String(500))
     message: Mapped[str] = mapped_column(Text, nullable=False)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[Optional[str]] = mapped_column(Text)
+    # Bounds the worker's retry/backoff loop (see notification_service.py):
+    # incremented on every send attempt, success or failure. `updated_at`
+    # (TimestampMixin, bumped on every row change) doubles as "last
+    # attempted at" for computing the next backoff window, so a separate
+    # timestamp column isn't needed.
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
         Index("idx_notification_restaurant_sent", "restaurant_id", "is_sent"),

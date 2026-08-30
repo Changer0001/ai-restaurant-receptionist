@@ -111,6 +111,21 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "AI Receptionist"
 
     # ========================================================================
+    # NOTIFICATIONS (Phase 6 worker — app/worker.py)
+    # ========================================================================
+    # How often the standalone notification worker polls for due,
+    # unsent Notification rows.
+    NOTIFICATION_POLL_INTERVAL_SECONDS: int = 15
+    # A notification stops being retried once it has failed this many
+    # times — left unsent with error_message set, for a human to notice,
+    # rather than retried forever.
+    NOTIFICATION_MAX_ATTEMPTS: int = 5
+    # Backoff between retries is base * 2^(attempt_count-1), capped at
+    # NOTIFICATION_BACKOFF_MAX_SECONDS.
+    NOTIFICATION_BACKOFF_BASE_SECONDS: int = 60
+    NOTIFICATION_BACKOFF_MAX_SECONDS: int = 3600
+
+    # ========================================================================
     # PUBLIC URL
     # ========================================================================
     PUBLIC_BASE_URL: str = "http://localhost:8000"

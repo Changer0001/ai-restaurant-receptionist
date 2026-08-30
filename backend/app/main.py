@@ -141,6 +141,19 @@ async def readiness_check(response: Response):
     except Exception as e:
         checks["vector_db"] = f"error: {str(e)}"
 
+    # Check SMTP (only if the notification worker would actually use it —
+    # an operator running with email notifications administratively
+    # disabled shouldn't have /ready flap on an SMTP server they never
+    # configured)
+    if settings.FEATURE_EMAIL_NOTIFICATIONS:
+        try:
+            from app.providers.email import get_email_provider
+
+            email_provider = await get_email_provider()
+            checks["smtp"] = "ok" if await email_provider.health_check() else "error: unreachable"
+        except Exception as e:
+            checks["smtp"] = f"error: {str(e)}"
+
     all_ok = all(v == "ok" for v in checks.values())
     response.status_code = 200 if all_ok else 503
 
