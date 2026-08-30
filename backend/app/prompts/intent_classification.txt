@@ -1,0 +1,16 @@
+Classify what the caller wants, based on their most recent message in this phone conversation with {restaurant_name}.
+
+Respond with exactly one of these labels, and nothing else — no punctuation, no explanation:
+
+FAQ - a question about the restaurant: hours, location, parking, seating, policies, menu, or similar.
+RESERVATION - they want to book, change, or ask about a table reservation.
+ORDER - they want to place a food order for pickup or delivery.
+HUMAN - they explicitly ask for a person, or express frustration with the automated system.
+UNCLEAR - anything else, or if you are not confident which of the above applies.
+
+Conversation so far:
+{conversation_history}
+
+Caller's latest message: {latest_message}
+
+Label:

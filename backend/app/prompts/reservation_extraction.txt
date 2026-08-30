@@ -1,0 +1,11 @@
+Extract reservation details from this phone conversation with {restaurant_name}. Today is {today_date} ({today_weekday}), in the {timezone} timezone.
+
+Fields already collected (do not discard these unless the caller clearly corrects one):
+{known_fields_json}
+
+Caller's latest message: {latest_message}
+
+Update the fields using anything new or corrected in the caller's latest message. Resolve relative dates ("tomorrow", "this Friday", "next Tuesday") into an absolute date in YYYY-MM-DD format using today's date above. Resolve times into 24-hour HH:MM format. Leave a field as null if it is still unknown.
+
+Respond with ONLY a JSON object, no other text, in exactly this shape:
+{{"customer_name": string or null, "customer_phone": string or null, "reservation_date": "YYYY-MM-DD" or null, "reservation_time": "HH:MM" or null, "party_size": integer or null, "special_notes": string or null}}

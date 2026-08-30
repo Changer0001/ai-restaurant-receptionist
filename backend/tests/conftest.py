@@ -44,6 +44,44 @@ async def session_maker(db_engine):
     return async_sessionmaker(db_engine, expire_on_commit=False, autoflush=False)
 
 
+@pytest_asyncio.fixture
+async def db_session(session_maker):
+    """A single AsyncSession for tests that talk to the ORM directly
+    (rather than through the HTTP `client` fixture)."""
+    async with session_maker() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def restaurant(db_session):
+    """A persisted Restaurant row with a standard week of hours — for
+    tests exercising the conversation engine, which needs a real
+    Restaurant (name, timezone, phone/email for notifications) rather
+    than just a restaurant_id string."""
+    from app.db.models import Restaurant as RestaurantModel
+    from app.db.models import RestaurantHours
+
+    r = RestaurantModel(
+        name="Test Bistro",
+        timezone="America/New_York",
+        phone_number="+15551234567",
+        email="owner@testbistro.example",
+        transfer_number="+15559876543",
+        is_active=True,
+    )
+    db_session.add(r)
+    await db_session.flush()
+
+    for day in range(5):
+        db_session.add(RestaurantHours(restaurant_id=r.id, day_of_week=day, opening_time="11:00", closing_time="22:00"))
+    for day in (5, 6):
+        db_session.add(RestaurantHours(restaurant_id=r.id, day_of_week=day, opening_time="12:00", closing_time="23:00"))
+
+    await db_session.commit()
+    await db_session.refresh(r)
+    return r
+
+
 @pytest.fixture
 def vector_db():
     """A fresh, isolated in-memory ChromaDB instance per test — never the

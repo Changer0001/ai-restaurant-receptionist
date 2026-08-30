@@ -1,15 +1,13 @@
 """
 Tests for the core RAG retrieval logic (app.services.knowledge_service),
 exercised directly against the service layer rather than through HTTP —
-this is what the future AI conversation layer (Phase 4) will call to
-ground its answers.
+this is what app.conversation.rag_answer (Phase 4) calls to ground its
+FAQ answers.
 
 These are the tests that matter most for "RAG safety": a caller must
 never receive another restaurant's knowledge, and an irrelevant query
 must come back empty rather than returning the least-bad match.
 """
-
-import pytest_asyncio
 
 from app.services import knowledge_service
 
@@ -18,12 +16,6 @@ async def _seed(db, vector_db, embedder, restaurant_id, title, content, document
     return await knowledge_service.create_document(
         db, vector_db, embedder, restaurant_id, title, content, document_type, None
     )
-
-
-@pytest_asyncio.fixture
-async def db_session(session_maker):
-    async with session_maker() as session:
-        yield session
 
 
 async def test_search_finds_relevant_chunk(db_session, vector_db, embedding_provider):

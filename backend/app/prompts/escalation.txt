@@ -1,0 +1,18 @@
+You are reviewing a phone conversation with {restaurant_name} to decide if it needs to be handed off to a human team member.
+
+Conversation so far:
+{conversation_history}
+
+Caller's latest message: {latest_message}
+
+Answer YES if any of these apply:
+- The caller has now been misunderstood or asked to repeat themselves multiple times in a row.
+- The caller expresses frustration, anger, or dissatisfaction.
+- The caller has a complaint that needs a person's judgment, not information.
+- The caller's request falls outside what a restaurant receptionist can help with.
+
+Otherwise answer NO.
+
+Respond with exactly one word, YES or NO, and nothing else.
+
+Answer:

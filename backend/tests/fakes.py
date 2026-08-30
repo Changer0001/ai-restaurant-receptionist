@@ -13,8 +13,10 @@ is confined to tests/.
 """
 
 import hashlib
+from typing import Callable, Union
 
 from app.providers.embedding.base import EmbeddingProvider
+from app.providers.llm.base import LLMProvider
 
 _DIMENSIONS = 32
 
@@ -38,3 +40,53 @@ class FakeEmbeddingProvider(EmbeddingProvider):
 
     async def health_check(self) -> bool:
         return True
+
+
+_Response = Union[str, Callable[[str], str]]
+_Rule = tuple[Callable[[str], bool], _Response]
+
+
+def contains(substring: str) -> Callable[[str], bool]:
+    """A rule predicate: matches if `substring` appears in the rendered prompt."""
+    return lambda prompt: substring in prompt
+
+
+class ScriptedLLMProvider(LLMProvider):
+    """
+    Stands in for OllamaLLMProvider in conversation-engine tests.
+
+    Routes each generate() call against an ordered list of (predicate,
+    response) rules, tested against the fully-rendered prompt text — the
+    first matching rule wins. `response` may be a literal string, or a
+    callable(prompt) -> str for replies that need to vary by call (e.g.
+    reservation extraction returning different fields on each turn).
+    Matching against stable, template-fixed instructional text (see
+    `contains()`) rather than the whole prompt keeps rules independent of
+    which variables happen to be interpolated into a given call.
+
+    Every call is recorded in `.calls` for tests that want to assert
+    which prompts were actually issued.
+    """
+
+    def __init__(self, rules: list[_Rule], default: str = "UNCLEAR"):
+        self._rules = rules
+        self._default = default
+        self.calls: list[str] = []
+
+    async def generate(self, prompt: str, temperature: float = 0.7, max_tokens: int | None = None) -> str:
+        self.calls.append(prompt)
+        for predicate, response in self._rules:
+            if predicate(prompt):
+                return response(prompt) if callable(response) else response
+        return self._default
+
+    async def chat(
+        self, messages: list[dict[str, str]], temperature: float = 0.7, max_tokens: int | None = None
+    ) -> str:
+        return await self.generate(messages[-1]["content"], temperature, max_tokens)
+
+    async def health_check(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["scripted-fake"]

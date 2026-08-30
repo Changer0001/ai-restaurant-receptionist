@@ -412,6 +412,52 @@ Implementation notes from actually building it (Phase 3):
 - **Simple**: Easy webhook integration
 - **Future**: Not locked in (TelephonyProvider interface)
 
+### Why the conversation engine doesn't use LLM-driven free-form tool calls
+
+The spec's tool-call architecture (section 18) describes "the LLM
+requests an action, the application validates it, the application
+executes it" — commonly implemented by having the model emit a
+structured directive (native function-calling, or a JSON block in its
+own output) that the application then parses and dispatches to whichever
+tool the model named.
+
+`app/conversation/engine.py` implements the same safety property —
+the LLM never writes to the database, every value it produces is
+validated before use — but the *dispatch* decision (which tool runs,
+and when) is made by deterministic Python state-machine logic, not by
+the model choosing freely each turn. The LLM's role is narrowed to
+in-state natural language understanding (classify intent, extract
+reservation fields) and generation (phrase a grounded FAQ answer);
+`app/conversation/tools.py`'s `create_reservation_request` and
+`app/conversation/hours_answer.py`'s structured lookup are the only two
+tools with a state that decides to invoke them, and that decision is
+always the engine's, never the model's.
+
+This was a deliberate scope-down from a more general design, weighed
+against this project's actual constraints:
+
+- **Reliability with a smaller local model.** Free-form tool-calling
+  protocols (native or JSON-in-text) are meaningfully less reliable with
+  an 8B open model than with a large hosted one — a malformed or
+  missing tool call mid-call degrades the caller's experience directly,
+  with no easy retry inside a live phone conversation.
+- **A phone call has less room for a wrong turn than a chat app.** A
+  chatbot can recover from a bad tool call in the next message; a phone
+  caller has already heard the (possibly wrong) result by the time
+  anyone notices.
+- **The full tool surface here is small and known in advance.** With
+  only a handful of tools (reservation creation, hours lookup, RAG
+  search), a state machine that decides when each applies is not meaningfully
+  less flexible than a model choosing among the same handful of options
+  — it's just more predictable.
+
+This is a call worth revisiting once a phase actually needs an LLM
+choosing among many tools dynamically (e.g. POS integration's menu
+lookup, availability check, and order creation all being live options in
+the same turn) — at that point, native function-calling (which recent
+Ollama versions and many models support) may earn its added complexity.
+For the tool surface Phases 4-7 need, it doesn't yet.
+
 ---
 
 For implementation details, see:
