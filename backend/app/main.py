@@ -7,18 +7,20 @@ configures middleware, and defines routes.
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from prometheus_client import make_asgi_app
+from sqlalchemy import text
 
 from app.api import routes
+from app.core.cache import close_redis, init_redis
 from app.core.config import settings
-from app.db.session import engine
 from app.db.base import Base
-
+from app.db.session import async_session_maker, engine
 
 # Configure structured logging
 logging.basicConfig(
@@ -48,10 +50,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.error(f"Failed to create database tables: {e}")
 
+    await init_redis()
+
     yield
 
     # Shutdown
     logger.info("Shutting down AI Restaurant Receptionist API")
+    await close_redis()
     await engine.dispose()
 
 
@@ -88,7 +93,7 @@ async def health_check():
 
 
 @app.get("/ready", tags=["Health"])
-async def readiness_check():
+async def readiness_check(response: Response):
     """
     Readiness check that verifies critical dependencies.
     Returns 503 if dependencies are unavailable.
@@ -97,9 +102,8 @@ async def readiness_check():
 
     # Check database
     try:
-        from app.db.session import get_db_session
-        async with get_db_session() as session:
-            await session.execute("SELECT 1")
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as e:
         checks["database"] = f"error: {str(e)}"
@@ -107,6 +111,9 @@ async def readiness_check():
     # Check Redis
     try:
         from app.core.cache import redis_client
+
+        if redis_client is None:
+            raise RuntimeError("Redis client not initialized")
         await redis_client.ping()
         checks["redis"] = "ok"
     except Exception as e:
@@ -115,28 +122,31 @@ async def readiness_check():
     # Check Ollama
     try:
         from app.providers.llm.ollama_provider import OllamaLLMProvider
+
         provider = OllamaLLMProvider()
-        await provider.health_check()
-        checks["ollama"] = "ok"
+        # health_check() returns False on failure rather than raising, so
+        # its result must be checked explicitly — catching exceptions alone
+        # would silently report "ok" for an unreachable Ollama server.
+        checks["ollama"] = "ok" if await provider.health_check() else "error: unreachable"
     except Exception as e:
         checks["ollama"] = f"error: {str(e)}"
 
     # Check Vector DB
     try:
         from app.rag.vector_db import get_vector_db
+
         vdb = await get_vector_db()
-        await vdb.health_check()
-        checks["vector_db"] = "ok"
+        checks["vector_db"] = "ok" if await vdb.health_check() else "error: unreachable"
     except Exception as e:
         checks["vector_db"] = f"error: {str(e)}"
 
     all_ok = all(v == "ok" for v in checks.values())
-    status_code = 200 if all_ok else 503
+    response.status_code = 200 if all_ok else 503
 
     return {
         "status": "ready" if all_ok else "not_ready",
         "checks": checks,
-        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

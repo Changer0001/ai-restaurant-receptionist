@@ -6,7 +6,7 @@ Abstracts away provider-specific details (Twilio, SIP, etc.)
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import Any, Dict
 
 
 class TelephonyProvider(ABC):

@@ -10,24 +10,23 @@ from enum import Enum
 from typing import Optional
 
 from sqlalchemy import (
-    Column,
-    String,
-    Text,
-    Integer,
-    Float,
+    JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
+    Integer,
+    String,
+    Text,
     UniqueConstraint,
-    JSON,
+)
+from sqlalchemy import (
     Enum as SQLEnum,
 )
-from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy.sql import func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import BaseModel, TenantModel
-
 
 # ============================================================================
 # ENUMS
@@ -67,7 +66,7 @@ class CallOutcomeEnum(str, Enum):
 # ============================================================================
 
 
-class Restaurant(BaseModel, __tablename__="restaurants"):
+class Restaurant(BaseModel):
     """Restaurant entity - the primary tenant."""
 
     __tablename__ = "restaurants"
@@ -126,7 +125,7 @@ class Restaurant(BaseModel, __tablename__="restaurants"):
     )
 
 
-class RestaurantPhoneNumber(TenantModel, __tablename__="restaurant_phone_numbers"):
+class RestaurantPhoneNumber(TenantModel):
     """Maps Twilio phone numbers to restaurants."""
 
     __tablename__ = "restaurant_phone_numbers"
@@ -140,14 +139,15 @@ class RestaurantPhoneNumber(TenantModel, __tablename__="restaurant_phone_numbers
     twilio_sid: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
-    # Foreign key
+    # Relationships
+    restaurant = relationship("Restaurant", back_populates="phone_numbers")
+
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_phone_restaurant_id"),
         Index("idx_phone_restaurant_id", "restaurant_id"),
     )
 
 
-class RestaurantHours(TenantModel, __tablename__="restaurant_hours"):
+class RestaurantHours(TenantModel):
     """Operating hours for restaurants."""
 
     __tablename__ = "restaurant_hours"
@@ -161,13 +161,12 @@ class RestaurantHours(TenantModel, __tablename__="restaurant_hours"):
     restaurant = relationship("Restaurant", back_populates="hours")
 
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_hours_restaurant_id"),
         Index("idx_hours_restaurant_day", "restaurant_id", "day_of_week"),
         UniqueConstraint("restaurant_id", "day_of_week", name="uq_restaurant_day"),
     )
 
 
-class RestaurantFAQ(TenantModel, __tablename__="restaurant_faqs"):
+class RestaurantFAQ(TenantModel):
     """FAQ entries for restaurants."""
 
     __tablename__ = "restaurant_faqs"
@@ -181,12 +180,11 @@ class RestaurantFAQ(TenantModel, __tablename__="restaurant_faqs"):
     restaurant = relationship("Restaurant", back_populates="faqs")
 
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_faq_restaurant_id"),
         Index("idx_faq_restaurant_category", "restaurant_id", "category"),
     )
 
 
-class RestaurantKnowledgeDocument(TenantModel, __tablename__="restaurant_knowledge_documents"):
+class RestaurantKnowledgeDocument(TenantModel):
     """Knowledge base documents for RAG."""
 
     __tablename__ = "restaurant_knowledge_documents"
@@ -202,7 +200,6 @@ class RestaurantKnowledgeDocument(TenantModel, __tablename__="restaurant_knowled
     restaurant = relationship("Restaurant", back_populates="knowledge_docs")
 
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_doc_restaurant_id"),
         Index("idx_doc_restaurant_type", "restaurant_id", "document_type"),
     )
 
@@ -212,7 +209,7 @@ class RestaurantKnowledgeDocument(TenantModel, __tablename__="restaurant_knowled
 # ============================================================================
 
 
-class User(BaseModel, __tablename__="users"):
+class User(BaseModel):
     """User accounts."""
 
     __tablename__ = "users"
@@ -246,7 +243,7 @@ class User(BaseModel, __tablename__="users"):
 # ============================================================================
 
 
-class Reservation(TenantModel, __tablename__="reservations"):
+class Reservation(TenantModel):
     """Reservation requests."""
 
     __tablename__ = "reservations"
@@ -270,7 +267,6 @@ class Reservation(TenantModel, __tablename__="reservations"):
     restaurant = relationship("Restaurant", back_populates="reservations")
 
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_reservation_restaurant_id"),
         Index("idx_reservation_restaurant_date", "restaurant_id", "reservation_date"),
         Index("idx_reservation_restaurant_status", "restaurant_id", "status"),
     )
@@ -281,7 +277,7 @@ class Reservation(TenantModel, __tablename__="reservations"):
 # ============================================================================
 
 
-class Call(TenantModel, __tablename__="calls"):
+class Call(TenantModel):
     """Call records."""
 
     __tablename__ = "calls"
@@ -302,19 +298,26 @@ class Call(TenantModel, __tablename__="calls"):
     was_escalated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     transcript: Mapped[Optional[str]] = mapped_column(Text)
     recording_path: Mapped[Optional[str]] = mapped_column(String(500))
-    metadata: Mapped[Optional[dict]] = mapped_column(JSON)
+    # NOTE: named call_metadata, not metadata — `metadata` is reserved on
+    # declarative models (it shadows Base.metadata / the MetaData instance).
+    call_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationships
     restaurant = relationship("Restaurant", back_populates="calls")
+    transcripts = relationship(
+        "CallTranscript", back_populates="call", cascade="all, delete-orphan"
+    )
+    events = relationship(
+        "CallEvent", back_populates="call", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
-        ForeignKey("restaurants.id", name="fk_call_restaurant_id"),
         Index("idx_call_restaurant_time", "restaurant_id", "start_time"),
         Index("idx_call_restaurant_outcome", "restaurant_id", "outcome"),
     )
 
 
-class CallTranscript(TenantModel, __tablename__="call_transcripts"):
+class CallTranscript(TenantModel):
     """Detailed call transcripts (turn-by-turn)."""
 
     __tablename__ = "call_transcripts"
@@ -325,12 +328,15 @@ class CallTranscript(TenantModel, __tablename__="call_transcripts"):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float)  # STT confidence
 
+    # Relationships
+    call = relationship("Call", back_populates="transcripts")
+
     __table_args__ = (
         Index("idx_transcript_call_time", "call_id", "timestamp"),
     )
 
 
-class CallEvent(TenantModel, __tablename__="call_events"):
+class CallEvent(TenantModel):
     """Call state machine events for debugging/auditing."""
 
     __tablename__ = "call_events"
@@ -339,6 +345,9 @@ class CallEvent(TenantModel, __tablename__="call_events"):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     event_data: Mapped[Optional[dict]] = mapped_column(JSON)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Relationships
+    call = relationship("Call", back_populates="events")
 
     __table_args__ = (
         Index("idx_event_call_time", "call_id", "timestamp"),
@@ -351,7 +360,7 @@ class CallEvent(TenantModel, __tablename__="call_events"):
 # ============================================================================
 
 
-class Notification(TenantModel, __tablename__="notifications"):
+class Notification(TenantModel):
     """Notification history."""
 
     __tablename__ = "notifications"
@@ -376,7 +385,7 @@ class Notification(TenantModel, __tablename__="notifications"):
 # ============================================================================
 
 
-class AuditLog(TenantModel, __tablename__="audit_logs"):
+class AuditLog(TenantModel):
     """Audit log for all user actions."""
 
     __tablename__ = "audit_logs"

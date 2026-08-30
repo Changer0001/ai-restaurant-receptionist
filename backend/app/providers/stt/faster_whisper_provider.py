@@ -40,8 +40,14 @@ class FasterWhisperSTTProvider(STTProvider):
         self.device = device
         self.model: WhisperModel | None = None
 
-    async def _load_model(self):
-        """Lazy load the Whisper model."""
+    async def _load_model(self) -> WhisperModel:
+        """Lazy load the Whisper model.
+
+        Returns the loaded model directly (rather than callers reading
+        self.model afterward) so its type is `WhisperModel`, not
+        `WhisperModel | None` — static analysis can't otherwise tell that
+        calling this method guarantees self.model is now set.
+        """
         if self.model is None:
             logger.info(f"Loading Whisper model: {self.model_size} on {self.device}")
             self.model = WhisperModel(
@@ -49,17 +55,18 @@ class FasterWhisperSTTProvider(STTProvider):
                 device=self.device,
                 compute_type="float16" if self.device == "cuda" else "float32",
             )
+        return self.model
 
     async def transcribe(self, audio: bytes) -> Tuple[str, float]:
         """Transcribe audio to text."""
         try:
-            await self._load_model()
+            model = await self._load_model()
 
             # Convert bytes to audio file-like object
             audio_file = io.BytesIO(audio)
 
             # Transcribe
-            segments, info = self.model.transcribe(
+            segments, info = model.transcribe(
                 audio_file,
                 language="en",
                 condition_on_previous_text=True,

@@ -5,7 +5,7 @@ Local inference via Ollama (https://ollama.ai)
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -54,7 +54,7 @@ class OllamaLLMProvider(LLMProvider):
             )
             response.raise_for_status()
             data = response.json()
-            return data.get("response", "").strip()
+            return str(data.get("response", "")).strip()
         except httpx.HTTPError as e:
             logger.error(f"Ollama generate error: {e}")
             raise
@@ -84,7 +84,7 @@ class OllamaLLMProvider(LLMProvider):
             data = response.json()
             # Extract content from the last message
             if "message" in data and "content" in data["message"]:
-                return data["message"]["content"].strip()
+                return str(data["message"]["content"]).strip()
             return ""
         except httpx.HTTPError as e:
             logger.error(f"Ollama chat error: {e}")

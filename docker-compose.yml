@@ -99,7 +99,7 @@ services:
       dockerfile: Dockerfile
     container_name: restaurant_ai_api
     environment:
-      - DATABASE_URL=postgresql://restaurantai:restaurantai@postgres:5432/restaurantai
+      - DATABASE_URL=postgresql+asyncpg://restaurantai:restaurantai@postgres:5432/restaurantai
       - REDIS_URL=redis://redis:6379/0
       - VECTOR_DB_URL=http://chromadb:8000
       - OLLAMA_BASE_URL=http://ollama:11434

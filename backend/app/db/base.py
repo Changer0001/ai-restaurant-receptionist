@@ -5,13 +5,20 @@ Provides base models and mixins for all database models.
 """
 
 from datetime import datetime
-from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, String, func
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """SQLAlchemy 2.0 typed declarative base.
+
+    Subclassing DeclarativeBase (rather than the legacy declarative_base()
+    factory function) is what lets mypy recognize `class BaseModel(Base, ...)`
+    below as a valid base class without needing the separate sqlalchemy
+    mypy plugin.
+    """
 
 
 class TimestampMixin:
@@ -42,10 +49,17 @@ class UUIDPrimaryKeyMixin:
 
 
 class TenantMixin:
-    """Mixin that adds tenant_id for multi-tenancy."""
+    """Mixin that adds tenant_id for multi-tenancy.
+
+    Every tenant-owned table gets a real foreign key constraint to
+    restaurants.id, not just an unconstrained column — the database
+    itself refuses to let a row point at a restaurant that doesn't
+    exist, on top of the application-layer filtering by restaurant_id.
+    """
 
     restaurant_id: Mapped[str] = mapped_column(
         String(36),
+        ForeignKey("restaurants.id", name="fk_restaurant_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

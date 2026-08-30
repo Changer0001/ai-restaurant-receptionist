@@ -29,7 +29,9 @@ wheels/
 *.egg
 .pytest_cache/
 .coverage
+htmlcov/
 .mypy_cache/
+.ruff_cache/
 .dmypy.json
 dmypy.json
 

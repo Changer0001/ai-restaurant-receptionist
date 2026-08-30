@@ -1,21 +1,21 @@
 """Database Package"""
 
 from app.db.base import Base, BaseModel, TenantModel
-from app.db.session import engine, async_session_maker, get_db_session
 from app.db.models import (
-    Restaurant,
-    RestaurantPhoneNumber,
-    RestaurantHours,
-    RestaurantFAQ,
-    RestaurantKnowledgeDocument,
-    User,
-    Reservation,
-    Call,
-    CallTranscript,
-    CallEvent,
-    Notification,
     AuditLog,
+    Call,
+    CallEvent,
+    CallTranscript,
+    Notification,
+    Reservation,
+    Restaurant,
+    RestaurantFAQ,
+    RestaurantHours,
+    RestaurantKnowledgeDocument,
+    RestaurantPhoneNumber,
+    User,
 )
+from app.db.session import async_session_maker, engine, get_db_session
 
 __all__ = [
     "Base",

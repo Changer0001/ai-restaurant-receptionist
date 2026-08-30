@@ -5,7 +5,7 @@ Abstract interface for language model providers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
+from typing import Dict, List, Optional
 
 
 class LLMProvider(ABC):

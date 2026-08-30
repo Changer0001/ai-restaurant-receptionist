@@ -5,10 +5,10 @@ Integration with Twilio Voice API for PSTN connectivity.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
-from twilio.rest import Client
 from twilio.request_validator import RequestValidator
+from twilio.rest import Client
 
 from app.core.config import settings
 from app.providers.telephony.base import TelephonyProvider
@@ -85,7 +85,7 @@ class TwilioTelephonyProvider(TelephonyProvider):
         try:
             call = self.client.calls(call_sid).update(status="completed")
             logger.info(f"Ended call {call_sid}")
-            return call.status == "completed"
+            return bool(call.status == "completed")
         except Exception as e:
             logger.error(f"Twilio end call error: {e}")
             return False
@@ -93,7 +93,7 @@ class TwilioTelephonyProvider(TelephonyProvider):
     async def send_digits(self, call_sid: str, digits: str) -> bool:
         """Send DTMF digits to a call."""
         try:
-            call = self.client.calls(call_sid).update(twiml=f'<Response><Play digits="{digits}"/></Response>')
+            self.client.calls(call_sid).update(twiml=f'<Response><Play digits="{digits}"/></Response>')
             logger.info(f"Sent digits {digits} to call {call_sid}")
             return True
         except Exception as e:

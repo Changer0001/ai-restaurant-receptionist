@@ -2,30 +2,39 @@
 Cache and Redis Integration
 
 Provides Redis client and caching utilities.
+
+Note: this uses `redis.asyncio` (the asyncio API shipped inside redis-py
+>=4.2), not the standalone `aioredis` package. `aioredis` is deprecated
+and unmaintained upstream, and on Python 3.11+ it fails at import time
+with `TypeError: duplicate base class TimeoutError` (it defines its own
+exception class that inherits from both `asyncio.TimeoutError` and the
+builtin `TimeoutError`, which became the same class in 3.11).
 """
 
 import json
 from typing import Any, Optional
 
-import aioredis
+import redis.asyncio as redis
+
 from app.core.config import settings
 
 # Global Redis client
-redis_client: Optional[aioredis.Redis] = None
+redis_client: Optional[redis.Redis] = None
 
 
-async def init_redis():
+async def init_redis() -> None:
     """Initialize Redis client."""
     global redis_client
     if redis_client is None:
-        redis_client = await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
-async def close_redis():
+async def close_redis() -> None:
     """Close Redis client."""
     global redis_client
     if redis_client:
         await redis_client.close()
+        redis_client = None
 
 
 async def get_cache(key: str) -> Optional[Any]:
@@ -34,12 +43,13 @@ async def get_cache(key: str) -> Optional[Any]:
         return None
 
     value = await redis_client.get(key)
-    if value:
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    return None
+    if value is None:
+        return None
+
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
 async def set_cache(key: str, value: Any, ttl: Optional[int] = None) -> bool:
@@ -50,10 +60,9 @@ async def set_cache(key: str, value: Any, ttl: Optional[int] = None) -> bool:
     if ttl is None:
         ttl = settings.REDIS_CACHE_DEFAULT_TTL
 
-    if isinstance(value, dict) or isinstance(value, list):
-        value = json.dumps(value)
-
-    await redis_client.setex(key, ttl, str(value))
+    # Always store as JSON so any JSON-serializable value (dict, list,
+    # bool, int, str, None) round-trips correctly through get_cache().
+    await redis_client.setex(key, ttl, json.dumps(value))
     return True
 
 
@@ -73,5 +82,5 @@ async def clear_cache_pattern(pattern: str) -> int:
 
     keys = await redis_client.keys(pattern)
     if keys:
-        return await redis_client.delete(*keys)
+        return int(await redis_client.delete(*keys))
     return 0

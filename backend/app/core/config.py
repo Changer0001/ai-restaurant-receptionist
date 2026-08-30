@@ -7,7 +7,7 @@ Uses Pydantic Settings for validation and type safety.
 
 from typing import List
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     # ========================================================================
     # DATABASE
     # ========================================================================
-    DATABASE_URL: str = "postgresql://restaurantai:restaurantai@localhost:5432/restaurantai"
+    # Must use the asyncpg driver scheme — SQLAlchemy's create_async_engine
+    # requires an async-capable DBAPI, and plain "postgresql://" resolves to
+    # the sync psycopg2 driver, which raises at engine-creation time.
+    DATABASE_URL: str = "postgresql+asyncpg://restaurantai:restaurantai@localhost:5432/restaurantai"
     DATABASE_ECHO: bool = False
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 10
@@ -196,8 +199,16 @@ class Settings(BaseSettings):
 
     @property
     def ALLOWED_HOSTS(self) -> List[str]:
-        """Get allowed hosts for TrustedHost middleware."""
-        return [self.PUBLIC_DOMAIN, "localhost", "127.0.0.1"]
+        """Get allowed hosts for TrustedHost middleware.
+
+        "testserver" is Starlette TestClient's fixed Host header — added
+        outside production only, so the test suite can exercise the real
+        middleware stack without weakening the production allow-list.
+        """
+        hosts = [self.PUBLIC_DOMAIN, "localhost", "127.0.0.1"]
+        if not self.IS_PRODUCTION:
+            hosts.append("testserver")
+        return hosts
 
     @property
     def WEBHOOK_URL_VOICE(self) -> str:
@@ -209,11 +220,11 @@ class Settings(BaseSettings):
         """Get the full Twilio status webhook URL."""
         return f"{self.PUBLIC_BASE_URL}{self.WEBHOOK_BASE_PATH}/twilio/status"
 
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
 # Global settings instance

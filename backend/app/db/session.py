@@ -4,30 +4,38 @@ Database Session Management
 Provides async SQLAlchemy session factory and session management utilities.
 """
 
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
-    create_async_engine,
     async_sessionmaker,
+    create_async_engine,
 )
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
-# Create async engine
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DATABASE_ECHO,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
-    poolclass=NullPool if settings.IS_DEVELOPMENT else None,
-    connect_args={
+# Build engine kwargs conditionally: pool_size/max_overflow are QueuePool
+# options and SQLAlchemy raises a TypeError if they're passed alongside
+# NullPool (which we use in development to avoid stale connections across
+# --reload restarts).
+_engine_kwargs: dict[str, Any] = {
+    "echo": settings.DATABASE_ECHO,
+    "connect_args": {
         "server_settings": {
             "application_name": "ai_restaurant_receptionist",
         }
     },
-)
+}
+
+if settings.IS_DEVELOPMENT:
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
+    _engine_kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
+
+# Create async engine
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 # Create async session factory
 async_session_maker = async_sessionmaker(

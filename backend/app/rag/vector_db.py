@@ -5,7 +5,7 @@ ChromaDB or Qdrant for RAG-powered knowledge retrieval.
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 

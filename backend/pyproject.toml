@@ -21,11 +21,15 @@ dependencies = [
 
     # Database
     "sqlalchemy==2.0.23",
-    "psycopg[binary]==3.17.0",
+    "asyncpg==0.30.0",
     "alembic==1.12.1",
+    "python-dateutil==2.8.2",  # required by alembic's file_template timezone support
 
-    # Async
-    "aioredis==2.0.1",
+    # Async / Cache
+    # Note: aioredis is deprecated and abandoned upstream; on Python 3.11+
+    # it crashes at import time (duplicate TimeoutError base class vs the
+    # stdlib). redis-py >=4.2 ships the same asyncio API as `redis.asyncio`,
+    # so that's what app/core/cache.py uses instead.
     "redis==5.0.1",
 
     # Data Validation
@@ -35,7 +39,6 @@ dependencies = [
     # Security
     "python-jose[cryptography]==3.3.0",
     "bcrypt==4.1.1",
-    "passlib==1.7.4",
 
     # HTTP Client
     "httpx==0.25.1",
@@ -56,9 +59,10 @@ dependencies = [
     "piper-tts==1.2.0",
 
     # Audio Processing
+    # (WAV container handling uses the stdlib `wave` module directly —
+    # no separate package needed for that.)
     "librosa==0.10.0",
     "soundfile==0.12.1",
-    "wave-stream==0.1.0",
 
     # Telephony
     "twilio==8.10.0",
@@ -73,7 +77,6 @@ dependencies = [
     "python-dotenv==1.0.0",
     "pyyaml==6.0.1",
     "tenacity==8.2.3",
-    "slack-sdk==3.26.1",  # For future Slack integration
 
     # Email
     "aiosmtplib==3.0.1",
@@ -127,10 +130,21 @@ select = [
     "C",   # flake8-comprehensions
     "B",   # flake8-bugbear
 ]
-ignore = ["E501", "W503"]
+# E501 (line too long) is redundant with the line-length setting above;
+# W503 (line break before binary operator) doesn't exist as a ruff rule
+# code — it's a flake8-only code for a style flake8 itself now considers
+# non-idiomatic — so listing it here made ruff refuse to start at all.
+# B008 (function call in argument default) is FastAPI's own `Depends(...)`
+# idiom — it's how dependency injection works, not a bug.
+ignore = ["E501", "B008"]
 
 [tool.mypy]
 python_version = "3.11"
+# No sqlalchemy mypy plugin: it requires every relationship() to also carry
+# an explicit Mapped[...] annotation to be usable, which would mean
+# touching every model for a checker-only benefit. app/db/base.py instead
+# subclasses DeclarativeBase directly (SQLAlchemy 2.0's typed base),
+# which mypy understands natively without a plugin.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Too strict for MVP, enable later
