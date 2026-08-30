@@ -73,6 +73,14 @@ async def _validated_form(
     # not uvicorn's own plain-http connection to Nginx.
     url = str(request.url)
 
+    # TEMPORARY debug logging — remove once signature validation is
+    # confirmed working. Never logs the actual auth token, only its
+    # length (a real Twilio auth token is 32 hex characters).
+    logger.warning(
+        f"DEBUG signature check: url={url!r} sig_header={signature!r} "
+        f"auth_token_len={len(telephony.auth_token)}"
+    )
+
     if not await telephony.validate_webhook_signature(signature, url, params):
         twilio_signature_failures_total.inc()
         logger.warning(f"Rejected Twilio webhook with invalid signature: {url}")
