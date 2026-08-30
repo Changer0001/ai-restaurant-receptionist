@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_WEBHOOK_SECRET: str = ""
     TWILIO_DEFAULT_TRANSFER_TIMEOUT: int = 30
+    # Declared (not just documented in .env.example) because pydantic-settings
+    # rejects any .env key with no matching field by default — a real .env
+    # copied from .env.example (which has always documented this setting)
+    # would otherwise crash the app at startup with a ValidationError before
+    # a single request could be served. Not read anywhere yet: SMS is
+    # currently always sent via TelephonyProvider/Twilio (see
+    # app/services/notification_service.py) — this exists for when a second
+    # SMS-capable provider is ever added.
+    SMS_PROVIDER: str = "twilio"
 
     # ========================================================================
     # SMTP / EMAIL
