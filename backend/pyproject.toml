@@ -7,8 +7,19 @@ name = "ai-restaurant-receptionist"
 version = "0.1.0"
 description = "Production-ready AI restaurant receptionist with local-first architecture"
 readme = "README.md"
-requires-python = ">=3.11"
-license = {text = "MIT"}
+# Upper-bounded, not just ">=3.11": torch==2.1.1 (pinned below, together
+# with the exact kokoro/faster-whisper/piper-tts versions it was
+# verified against) has no Python 3.12 wheel — pip's resolver fails
+# deep into dependency resolution with a confusing "no matching
+# distribution" error rather than a clear "wrong Python version" one
+# without this bound. Bumping torch to a 3.12-compatible release isn't
+# done here because it would mean re-verifying the whole audio/AI
+# provider stack (Kokoro TTS, faster-whisper) against a torch version
+# this project has never actually run inference against — a real
+# GPU/model-weights verification this sandbox can't do, so it's left
+# for whoever next needs Python 3.12 support specifically.
+requires-python = ">=3.11,<3.12"
+license = "MIT"
 authors = [
     {name = "Burak Yilmaz", email = "yilmmazburak@gmail.com"}
 ]
@@ -119,6 +130,19 @@ dev = [
     # test suite's own fixtures.
     "aiosqlite==0.22.1",
 ]
+
+[tool.setuptools.packages.find]
+# Without this, setuptools' automatic flat-layout discovery finds two
+# top-level directories that look like packages (app/, alembic/) and
+# refuses to guess which one this distribution actually is — a hard
+# error on modern setuptools (>=61), not just a warning: `pip install
+# -e ".[dev]"` fails outright with "Multiple top-level packages
+# discovered in a flat-layout" before installing anything at all. Only
+# `app` (and its subpackages) is the actual installable package;
+# `alembic/` is invoked directly via the `alembic` CLI reading
+# alembic.ini/env.py in place, never imported as a library, and
+# `tests/` should never ship in a built wheel regardless.
+include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -265,6 +265,31 @@ every real request then failing on "no such table" with no obvious
 link back to the actual cause. Now only added when `DATABASE_URL`
 is actually a `postgresql` URL.
 
+Found immediately after, from a real user's first `pip install -e
+".[dev]"` on their own machine (Python 3.12, a genuinely fresh clone —
+exactly the scenario none of the above had actually been tried
+against): three more packaging bugs, all in `backend/pyproject.toml`.
+`readme = "README.md"` pointed at a file that never existed —
+`backend/README.md` was never created, so every install printed a
+`SetuptoolsWarning` (added a real one). No `[tool.setuptools.packages.
+find]` was configured, so a modern setuptools sees two top-level
+directories that look like packages (`app/`, `alembic/`) and refuses
+to guess which is the actual distribution — a hard, immediate failure
+("Multiple top-level packages discovered in a flat-layout") on install
+number one, before a single dependency downloads; scoped discovery to
+`app*` (`alembic/` is invoked via its own CLI/config, never imported;
+`tests/` should never ship in a wheel regardless). And `torch==2.1.1`
+— pinned in Phase 5 alongside the exact Kokoro/faster-whisper/piper-tts
+versions it was verified against — has no Python 3.12 wheel at all;
+pip's resolver failed many dependencies deep with a confusing "no
+matching distribution" error rather than a clear one. `requires-python`
+narrowed to `>=3.11,<3.12` so this now fails immediately and legibly
+instead. All three verified by reproducing the exact failure in a
+throwaway Python 3.12 venv, then confirming a real, complete
+`pip install -e ".[dev]"` (not just its metadata step) succeeds
+end-to-end on Python 3.11 and the full test suite still passes against
+that fresh install.
+
 ## Test Suite
 
 **198 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
@@ -422,10 +447,19 @@ docker compose exec ollama ollama pull nomic-embed-text
 ```
 
 Running the test suite locally (no Docker required — everything runs
-against in-memory fakes):
+against in-memory fakes). **Requires Python 3.11** specifically (not
+3.12+): `torch==2.1.1`, pinned together with the exact Kokoro/faster-
+whisper/piper-tts versions it was verified against, has no Python 3.12
+wheel — `pyproject.toml`'s `requires-python = ">=3.11,<3.12"` enforces
+this with a clear error rather than a confusing deep pip-resolver
+failure. Also requires a virtual environment on Debian/Ubuntu (PEP
+668's "externally managed environment" blocks a plain `pip install`
+outside one):
 
 ```bash
 cd backend
+python3.11 -m venv venv
+source venv/bin/activate
 pip install -e ".[dev]"
 pytest tests/ -v
 ruff check app/ tests/
