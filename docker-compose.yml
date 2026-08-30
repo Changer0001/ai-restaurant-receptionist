@@ -42,19 +42,31 @@ services:
       - app-network
 
   chromadb:
-    # Pinned to match backend/pyproject.toml's exact `chromadb==0.4.21`
-    # Python client (chosen for numpy 1.26.3 compatibility — see that
-    # file's own comments). `:latest` here would drift forward on every
-    # fresh pull while the client stays pinned; ChromaDB has shipped
-    # breaking REST API changes since 0.4.21 (the old client's
-    # /api/v1/tenants/... calls 404 against a newer server), so an
-    # unpinned server image and a pinned client are only compatible by
-    # accident, and only until the next `docker compose pull`. Found via
-    # a real user hitting exactly this drift.
-    image: ghcr.io/chroma-core/chroma:0.4.21
+    # Pinned (not `:latest`, which drifts forward on every fresh pull
+    # while backend/pyproject.toml's Python client stays pinned to an
+    # exact chromadb==0.4.21 — see that file's own comments) to a
+    # server version verified compatible with that exact client:
+    #   - Its REST API still serves /api/v1/tenants/{tenant} etc. — the
+    #     0.4.21 client's actual calls (ChromaDB broke this in later
+    #     major versions, moving to /api/v2/...).
+    #   - Its own server code doesn't crash on import: 0.4.21 through
+    #     0.5.5's chromadb/api/types.py uses `np.float_`, removed in
+    #     NumPy 2.0 — every one of those *server* image builds crashes
+    #     on startup against a NumPy 2.0 bundled inside the image
+    #     itself (a real user hit this first, pinning to plain 0.4.21).
+    #     Verified by downloading and inspecting the actual PyPI wheel
+    #     source for each 0.4.x/0.5.x release: fixed starting at 0.5.7,
+    #     which is also the earliest version confirmed (same method)
+    #     to still serve the v1 API routes above.
+    image: ghcr.io/chroma-core/chroma:0.5.7
     container_name: restaurant_ai_chromadb
     environment:
-      CHROMA_DB_IMPL: duckdb
+      # CHROMA_DB_IMPL (duckdb) is 0.3.x-era config, silently ignored by
+      # 0.5.7's server — verified in its own chromadb/config.py, where
+      # `is_persistent` defaults to False. IS_PERSISTENT is the current
+      # env var that actually enables on-disk (rather than in-memory)
+      # storage; without it, data wouldn't survive a container restart.
+      IS_PERSISTENT: "TRUE"
       PERSIST_DIRECTORY: /chroma/data
     ports:
       - "8011:8000"
