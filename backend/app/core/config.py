@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # ========================================================================
     # VECTOR DATABASE
     # ========================================================================
-    VECTOR_DB_URL: str = "http://localhost:8001"
+    VECTOR_DB_URL: str = "http://localhost:8011"
     VECTOR_DB_PROVIDER: str = "chromadb"
     VECTOR_DB_COLLECTION_PREFIX: str = "restaurant_"
 

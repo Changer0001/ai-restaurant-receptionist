@@ -356,7 +356,7 @@ curl -s http://localhost:11434/api/tags | grep -q "qwen" && echo "✓ Ollama OK"
 
 # 4. Check ChromaDB
 echo "Testing ChromaDB..."
-curl -s http://localhost:8001/api/version && echo "✓ ChromaDB OK" || echo "✗ ChromaDB FAILED"
+curl -s http://localhost:8011/api/version && echo "✓ ChromaDB OK" || echo "✗ ChromaDB FAILED"
 
 # 5. Check Redis
 echo "Testing Redis..."

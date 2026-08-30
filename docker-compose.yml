@@ -57,7 +57,7 @@ services:
       CHROMA_DB_IMPL: duckdb
       PERSIST_DIRECTORY: /chroma/data
     ports:
-      - "8001:8000"
+      - "8011:8000"
     volumes:
       - chromadb_data:/chroma/data
     healthcheck:
