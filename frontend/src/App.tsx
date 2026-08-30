@@ -1,28 +1,39 @@
-import React from 'react'
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { AuthProvider } from '@/auth/AuthContext'
+import { ProtectedRoute } from '@/auth/ProtectedRoute'
+import { Layout } from '@/components/Layout'
+import { CallDetailPage } from '@/pages/CallDetailPage'
+import { CallsPage } from '@/pages/CallsPage'
+import { DashboardPage } from '@/pages/DashboardPage'
+import { FaqsPage } from '@/pages/FaqsPage'
+import { HoursPage } from '@/pages/HoursPage'
+import { KnowledgePage } from '@/pages/KnowledgePage'
+import { LoginPage } from '@/pages/LoginPage'
+import { ProfilePage } from '@/pages/ProfilePage'
+import { ReservationsPage } from '@/pages/ReservationsPage'
 
 function App() {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold text-gray-900 mb-4">
-          AI Restaurant Receptionist
-        </h1>
-        <p className="text-xl text-gray-600 mb-8">
-          Production-Ready Local-First MVP
-        </p>
-        <div className="space-y-4">
-          <p className="text-gray-700">
-            API Status: <span id="api-status">Checking...</span>
-          </p>
-          <a
-            href="/docs"
-            className="inline-block px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition"
-          >
-            API Documentation
-          </a>
-        </div>
-      </div>
-    </div>
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+
+        <Route element={<ProtectedRoute />}>
+          <Route element={<Layout />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="calls" element={<CallsPage />} />
+            <Route path="calls/:callId" element={<CallDetailPage />} />
+            <Route path="reservations" element={<ReservationsPage />} />
+            <Route path="faqs" element={<FaqsPage />} />
+            <Route path="knowledge" element={<KnowledgePage />} />
+            <Route path="hours" element={<HoursPage />} />
+            <Route path="profile" element={<ProfilePage />} />
+          </Route>
+        </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </AuthProvider>
   )
 }
 

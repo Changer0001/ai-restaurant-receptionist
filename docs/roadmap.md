@@ -102,6 +102,43 @@ fixing untested, unreachable code adds risk without a way to verify the
 fix; worth cleaning up (or removing, if genuinely never needed) the
 next time any of them gains a real caller.
 
+### No automated frontend test suite
+
+`frontend/package.json` has no test runner configured (no Vitest,
+Jest, or React Testing Library) — `npm run type-check`, `npm run lint`,
+and `npm run build` all passing cleanly is the quality gate for this
+phase, backed by a one-time manual Playwright walkthrough of every page
+(see DEVELOPMENT_STATUS.md's Phase 8 section) rather than a suite that
+re-runs on every future change. Fine for the amount of UI logic this
+dashboard currently has (mostly thin CRUD forms over the already
+thoroughly-tested backend API), but a real gap once the frontend grows
+meaningfully more interactive logic of its own.
+
+**To close the gap:** add Vitest + React Testing Library, starting with
+`AuthContext`'s token-refresh interceptor (`src/api/client.ts`) — the
+single piece of frontend logic with real, non-trivial behavior (retry-
+once-then-redirect) worth a unit test independent of the backend.
+
+### No platform-admin view in the dashboard
+
+The backend already distinguishes `platform_admin` from restaurant
+roles (`list_restaurants_for_platform_admin`, `require_restaurant_*`
+allowing admins through every tenant check), but the dashboard's UI
+has no multi-restaurant switcher or platform-wide view — `AuthContext`
+assumes a single `user.restaurant_id` throughout. A platform admin can
+still authenticate and hit any restaurant's API directly, just not
+through this UI.
+
+### No manual reservation creation from the dashboard
+
+Staff can list, view, and confirm/decline reservation requests, but
+can't create one by hand for a walk-in or a phone call the AI didn't
+handle (see `app/schemas/reservation.py`'s docstring) — every
+reservation in this system still originates from a live AI-handled
+call. Adding a `POST /api/restaurants/{id}/reservations` plus a "New
+Reservation" form would close this without touching the conversation
+engine's own reservation-creation path.
+
 ### Reservation availability
 
 Reservations created by this system are *requests*, not confirmed

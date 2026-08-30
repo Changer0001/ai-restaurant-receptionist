@@ -19,14 +19,23 @@ from app.core.config import settings
 # options and SQLAlchemy raises a TypeError if they're passed alongside
 # NullPool (which we use in development to avoid stale connections across
 # --reload restarts).
-_engine_kwargs: dict[str, Any] = {
-    "echo": settings.DATABASE_ECHO,
-    "connect_args": {
+_engine_kwargs: dict[str, Any] = {"echo": settings.DATABASE_ECHO}
+
+# `server_settings` is an asyncpg/Postgres-specific connect_args key —
+# passing it to any other DBAPI (e.g. aiosqlite, if DATABASE_URL is ever
+# pointed elsewhere for local experimentation) raises
+# `TypeError: 'server_settings' is an invalid keyword argument`.
+# app.main's lifespan swallows that as a logged, non-fatal startup
+# error during table creation, so the failure mode without this check
+# is silent: the app starts and reports healthy with zero tables
+# actually created, and every real request then fails on "no such
+# table" with no obvious link back to the real cause.
+if settings.DATABASE_URL.startswith("postgresql"):
+    _engine_kwargs["connect_args"] = {
         "server_settings": {
             "application_name": "ai_restaurant_receptionist",
         }
-    },
-}
+    }
 
 if settings.IS_DEVELOPMENT:
     _engine_kwargs["poolclass"] = NullPool

@@ -561,6 +561,52 @@ receptionist's number rather than an unfamiliar shared one — relevant
 for a multi-tenant deployment where many unrelated restaurants' owners
 would otherwise all see texts from the exact same sender.
 
+### Why the dashboard talks to a relative `/api`, not a configured base URL
+
+`frontend/src/api/client.ts`'s axios instance always calls `/api/...`,
+never an absolute URL read from an environment variable. In every real
+deployment (`docker-compose.yml`'s `nginx` service) the frontend and
+API share one origin — Nginx serves the built frontend at `/` and
+proxies `/api/` to the backend — so a relative path is not just
+simpler, it avoids a whole class of CORS configuration that a
+cross-origin setup would otherwise need. `vite.config.ts`'s dev-server
+proxy (`VITE_API_PROXY_TARGET`, defaulting to `http://localhost:8000`)
+makes the exact same relative path work against a locally-running
+backend during `npm run dev`, so the frontend code never needs to know
+or care which environment it's running in.
+
+### Why JWTs live in `localStorage`, not an httpOnly cookie
+
+The usual argument for httpOnly cookies over `localStorage` is that
+JavaScript (and thus a successful XSS payload) can read `localStorage`
+but not an httpOnly cookie. That protection only matters if the app
+plausibly runs attacker-controlled script in the first place — this is
+an internal admin dashboard for restaurant staff with no third-party
+content, user-generated HTML rendering, or plugin surface anywhere in
+it, not a public-facing app. The backend is also a pure bearer-token
+JSON API (`app/api/deps.py` reads `Authorization: Bearer ...`
+exclusively) that never sets cookies, so httpOnly cookie auth would
+need CSRF protection added on the backend for a benefit this
+particular frontend doesn't have much use for. Revisit if this
+dashboard ever embeds untrusted content (e.g. rendering caller-supplied
+text as HTML rather than plain text, which it does not do today).
+
+### Why Calls/Reservations are read/status-update-only from the admin API
+
+`GET /api/restaurants/{id}/calls` and `.../reservations` have no
+corresponding `POST` — both resources are created exclusively by the
+voice pipeline during a live call (`app/voice/session.py` for calls,
+`app/conversation/tools.py.create_reservation_request` for
+reservations), and the admin API only ever reads them or (for
+reservations) updates a status field. This mirrors the same "controlled
+tool" principle used throughout `app/conversation/`: a `Call` row
+without a real Twilio `call_sid` or a `Reservation` without a real
+conversation behind it would be fabricated data with nothing to back
+it, so the dashboard doesn't offer a way to create either by hand. See
+docs/roadmap.md's "No manual reservation creation" entry for the one
+legitimate case (a walk-in, or a call the AI didn't handle) this
+currently can't cover.
+
 ---
 
 For implementation details, see:

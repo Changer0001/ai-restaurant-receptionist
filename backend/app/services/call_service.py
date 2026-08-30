@@ -12,8 +12,10 @@ identifier every other webhook and API call about this call will carry.
 from datetime import datetime, timezone
 from typing import Optional
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models import Call, CallEvent, CallOutcomeEnum, CallTranscript
 
@@ -42,6 +44,38 @@ async def create_call(
 async def get_call_by_sid(db: AsyncSession, call_sid: str) -> Optional[Call]:
     result = await db.execute(select(Call).where(Call.call_sid == call_sid))
     return result.scalar_one_or_none()
+
+
+async def list_calls_for_restaurant(
+    db: AsyncSession, restaurant_id: str, *, limit: int = 50, offset: int = 0
+) -> list[Call]:
+    """Most recent calls first — for the admin dashboard's call history
+    view. Doesn't eager-load transcripts: a busy restaurant's call list
+    could otherwise mean transferring hundreds of full transcripts
+    nobody's looking at yet (see get_call_or_404 for the detail view)."""
+    result = await db.execute(
+        select(Call)
+        .where(Call.restaurant_id == restaurant_id)
+        .order_by(Call.start_time.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all())
+
+
+async def get_call_or_404(db: AsyncSession, restaurant_id: str, call_id: str) -> Call:
+    result = await db.execute(
+        select(Call)
+        .options(selectinload(Call.transcripts))
+        .where(Call.id == call_id, Call.restaurant_id == restaurant_id)
+    )
+    call = result.scalar_one_or_none()
+    if call is None:
+        # 404 for a real call ID belonging to another restaurant too —
+        # tenant isolation, same as every other restaurant-scoped lookup
+        # in this codebase.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+    return call
 
 
 async def append_transcript_turn(

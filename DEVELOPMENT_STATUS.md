@@ -1,12 +1,13 @@
 # Development Status
 
-**Phases 1–6 complete.** Foundation, restaurant management API, RAG
-knowledge base, the AI conversation engine, voice (Twilio + local
-STT/TTS wired into a live call), and now notification delivery (a
-standalone worker that actually sends the SMS/email Phase 4 already
-queues) are built, tested, and verified. Phase 7 (live-call transfer)
-was already completed as part of Phase 5 — see that section below — so
-Phase 8 (the React admin dashboard) is next.
+**Phases 1–6 and 8 complete.** Foundation, restaurant management API,
+RAG knowledge base, the AI conversation engine, voice (Twilio + local
+STT/TTS wired into a live call), notification delivery (a standalone
+worker that actually sends the SMS/email Phase 4 already queues), and
+now the React admin dashboard are built, tested, and verified. Phase 7
+(live-call transfer) was already completed as part of Phase 5 — see
+that section below. Phase 9 (Prometheus business metrics / Grafana
+dashboards) is next.
 
 ## ✅ Phase 1 — Foundation
 
@@ -189,9 +190,84 @@ Phase 8 (the React admin dashboard) is next.
   attempted at" for computing backoff, so no second timestamp column
   was needed
 
+## ✅ Phase 8 — React Admin Dashboard
+
+Backend additions (the dashboard needed read/status-update access to
+data that had no API surface at all before this phase):
+
+- `GET /api/restaurants/{id}/calls`, `GET .../calls/{call_id}` — call
+  history and full per-call transcript. Read-only: calls are created
+  and updated entirely by the voice pipeline, never through this API
+- `GET /api/restaurants/{id}/reservations`, `GET .../reservations/{id}`,
+  `PATCH .../reservations/{id}` — the reservation queue staff actually
+  work from day to day: list (optionally filtered by status), view one,
+  and confirm/decline a pending request. Read access is open to any
+  authenticated user at the restaurant (including staff); the status
+  update is too — unlike editing the restaurant's profile/hours/FAQs
+  (owner/manager only), this is front-of-house's routine job
+- `app/services/call_service.list_calls_for_restaurant`/`get_call_or_404`
+  and the new `app/services/reservation_service.py` back these
+
+Frontend (`frontend/`, previously an unstyled placeholder page — see
+Bugs Fixed below): a real single-page app —
+`AuthContext`/`ProtectedRoute` (JWT stored in `localStorage`; an axios
+response interceptor transparently refreshes an expired access token
+once and retries the original request, redirecting to `/login` only if
+the refresh itself fails), a sidebar `Layout`, and one page per
+resource: Dashboard (recent calls + pending reservations at a glance),
+Calls (list + transcript detail), Reservations (filterable list,
+confirm/decline actions), FAQs (create/edit/delete), Knowledge Base
+(upload/reindex/delete), Hours (a full weekly editor, PUT-replace to
+match the backend's semantics), and Restaurant Profile.
+
+Verified with a live end-to-end pass, not just `npm run build`:
+started the real FastAPI app and the Vite dev server together and
+drove the whole UI with Playwright — register, every nav page, FAQ
+creation, hours save, profile save, logout — confirming the actual
+HTTP contracts match what the frontend code expects and catching the
+`.gitignore` and `app/db/session.py` bugs below that a build alone
+would not have surfaced.
+
+## Bugs Fixed in Phase 8
+
+The frontend's Phase 1 scaffolding didn't actually work at all, on any
+of the three fronts a working frontend needs: `npm run build` and
+`npm run type-check` both failed immediately (an unused `React` import
+in `App.tsx` — real, current React with the JSX transform never
+references `React` directly); `npm run lint` didn't run at all (no
+ESLint config file existed anywhere in the project); and `App.tsx` used
+Tailwind utility classes (`bg-gradient-to-br`, `text-4xl`, ...) with no
+Tailwind installed, no `tailwind.config.js`/`postcss.config.js`, and no
+`@tailwind` directives in `index.css` at all — every one of those
+classes would have rendered as nothing. All three fixed: the unused
+import, a real `.eslintrc.cjs`, and a genuine Tailwind v3 + PostCSS
+setup, verified end-to-end (see above) rather than just by a clean
+build.
+
+Also found: a bare `lib/` entry in the root `.gitignore` (standard
+Python-venv boilerplate) was silently excluding this phase's own
+`frontend/src/lib/` from `git status`/`git add` entirely — an unscoped
+pattern in a `.gitignore` shared by a Python backend and a Node
+frontend matches same-named directories in both. Scoped every
+Python-packaging-specific entry (`lib/`, `build/`, `env/`, `var/`,
+etc.) to `backend/` so this can't recur for any future same-named
+frontend directory.
+
+And: `app/db/session.py` passed asyncpg-specific `connect_args`
+(`server_settings`) to `create_async_engine` unconditionally. Against
+the real Postgres `DATABASE_URL` this is harmless, but pointing
+`DATABASE_URL` at anything else (found while standing up a throwaway
+SQLite backend for the Playwright smoke test above) raises
+`TypeError: 'server_settings' is an invalid keyword argument` during
+table creation — caught and merely logged by `app.main`'s lifespan, so
+the app starts, reports healthy, and silently has zero tables, with
+every real request then failing on "no such table" with no obvious
+link back to the actual cause. Now only added when `DATABASE_URL`
+is actually a `postgresql` URL.
+
 ## Test Suite
 
-**189 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
+**198 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
 `app/` and `tests/`. Runs entirely against in-memory SQLite (via
 `StaticPool`), an isolated in-memory ChromaDB per test (unique
 collection name per test — see the note in `conftest.py`'s `vector_db`
@@ -244,6 +320,16 @@ send_sms()` against a mocked Twilio client (success and failure),
 port selection, credential-less sending, health check), and the
 worker's `run_once()` end to end against the real notification-service
 wiring with fake providers substituted in.
+
+Phase 8 additionally covers (backend): listing calls most-recent-first,
+call detail with its full transcript, tenant isolation on both (a
+second restaurant's owner gets 404, not the data), listing/filtering/
+updating reservations by status, and 404s for an unknown or
+cross-tenant reservation. The frontend has no automated test suite
+(no test runner is configured in `package.json` — see docs/roadmap.md)
+— `tsc --noEmit`, `eslint`, and `vite build` all passing cleanly is
+the frontend's equivalent gate, backed by the one-time Playwright
+walkthrough described above for actual runtime behavior.
 
 ## Bugs Fixed Along the Way
 
@@ -319,7 +405,6 @@ docs/roadmap.md).
 
 ## Not Yet Built (By Design — Later Phases)
 
-- React admin dashboard beyond the Phase 1 skeleton (Phase 8)
 - Prometheus business metrics, Grafana dashboards beyond the Phase 1
   scaffolding (Phase 9)
 - Production hardening: backups, rate limiting, secret rotation,
@@ -333,6 +418,7 @@ docker compose up -d
 docker compose exec ollama ollama pull qwen3:8b
 docker compose exec ollama ollama pull nomic-embed-text
 # API docs: http://localhost/docs
+# Admin dashboard: http://localhost (served by nginx, proxying /api to the backend)
 ```
 
 Running the test suite locally (no Docker required — everything runs
@@ -344,6 +430,18 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ruff check app/ tests/
 mypy app/
+```
+
+Running the frontend locally against a backend of your own (no Docker
+required — `VITE_API_PROXY_TARGET` defaults to `http://localhost:8000`):
+
+```bash
+cd frontend
+npm install
+npm run dev       # http://localhost:5173
+npm run type-check
+npm run lint
+npm run build
 ```
 
 ## Key Files
@@ -361,6 +459,10 @@ mypy app/
 - `backend/app/worker.py` — the standalone notification-sending worker
 - `backend/app/services/notification_service.py` — notification
   dispatch, retry, and backoff logic
+- `frontend/src/App.tsx` — the dashboard's routes
+- `frontend/src/api/client.ts` — axios instance, auth-refresh
+  interceptor
+- `frontend/src/auth/AuthContext.tsx` — login/register/session state
 - `docker-compose.yml` — full local stack
 - `docs/architecture.md` — system design and decision log
 - `docs/roadmap.md` — documented gaps and future work

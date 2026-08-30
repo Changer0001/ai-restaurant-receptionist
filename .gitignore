@@ -4,26 +4,32 @@
 .env.*.local
 
 # Python
+# Scoped to backend/ (not left bare) — an unscoped `lib/`, `build/`,
+# etc. would also match same-named source directories elsewhere in
+# this repo (e.g. frontend/src/lib/), silently excluding real frontend
+# source files from every `git add`. Found the hard way: this phase's
+# frontend/src/lib/format.ts never showed up in `git status` at all
+# until this was fixed.
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
+backend/env/
+backend/venv/
+backend/ENV/
+backend/build/
+backend/develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+backend/downloads/
+backend/eggs/
+backend/.eggs/
+backend/lib/
+backend/lib64/
+backend/parts/
+backend/sdist/
+backend/var/
+backend/wheels/
 *.egg-info/
 .installed.cfg
 *.egg
