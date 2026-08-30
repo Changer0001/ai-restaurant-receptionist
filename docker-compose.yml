@@ -106,8 +106,16 @@ services:
       - ENVIRONMENT=development
       - DEBUG=true
       - LOG_LEVEL=INFO
-    ports:
-      - "8000:8000"
+    # No `ports:` mapping — the API must only be reachable through Nginx
+    # (port 80/443), never published directly to the host. This is a real
+    # security boundary, not just tidiness: this project's Twilio webhook
+    # signature validation trusts X-Forwarded-Proto from whoever reaches
+    # uvicorn directly (see --forwarded-allow-ips below) to reconstruct
+    # the https:// URL Twilio actually signed against; if this port were
+    # also published to the host, a caller reaching it directly (bypassing
+    # Nginx) could forge that header and defeat signature validation
+    # entirely. Use `docker compose exec api <cmd>` for direct access
+    # during development instead of a published port.
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,10 +143,22 @@ services:
       retries: 5
     networks:
       - app-network
+    # --proxy-headers makes uvicorn trust X-Forwarded-Proto/-For from
+    # Nginx, so request.url reports the real https:// scheme Twilio
+    # signed against rather than uvicorn's own plain-http connection to
+    # Nginx — without it, webhook signature validation fails on every
+    # real request in this reverse-proxied deployment.
+    # --forwarded-allow-ips='*' trusts that header from any peer that can
+    # reach this container; safe here specifically because this service
+    # publishes no host port (see above) and is unreachable from outside
+    # the docker-compose network, where every other container is part of
+    # this same trust boundary. Scope this down to Nginx's actual address
+    # in any topology where that assumption doesn't hold.
     command: >
       sh -c "
         alembic upgrade head &&
         python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+        --proxy-headers --forwarded-allow-ips='*'
       "
 
   # ============================================================================

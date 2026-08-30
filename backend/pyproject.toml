@@ -45,9 +45,17 @@ dependencies = [
     "aiohttp==3.9.1",
 
     # AI/ML
-    "ollama==0.1.0",
-    "faster-whisper==0.10.0",
-    "openai-whisper==20231117",  # For compatibility
+    # Note: no "ollama" package here — OllamaLLMProvider talks to
+    # Ollama's REST API directly via httpx (already a dependency below),
+    # never the ollama-python client library, so it isn't needed.
+    #
+    # Not faster-whisper==0.10.0: it pins an old `av` version with no
+    # prebuilt wheel for current platforms, so pip tries to compile it
+    # from source and fails without libavformat/libavcodec/... *development*
+    # headers — plain `apt-get install ffmpeg` (runtime libraries only)
+    # doesn't provide those, so this would fail the same way inside the
+    # Docker build too.
+    "faster-whisper==1.2.1",
     "transformers==4.36.0",
     "torch==2.1.1",
     "numpy==1.26.3",
@@ -56,7 +64,12 @@ dependencies = [
     "chromadb==0.4.21",
 
     # TTS
-    "piper-tts==1.2.0",
+    "kokoro==0.9.4",
+    # 1.7.0, not the older 1.2.0: the AudioChunk-based synthesize() API
+    # this project's PiperTTSProvider is written against (audio_int16_bytes,
+    # voice.config.sample_rate) doesn't exist in 1.2.0, which instead
+    # streams raw bytes via a differently-named synthesize_stream_raw().
+    "piper-tts==1.7.0",
 
     # Audio Processing
     # (WAV container handling uses the stdlib `wave` module directly —
@@ -154,7 +167,9 @@ ignore_missing_imports = true
 module = [
     "chromadb.*",
     "faster_whisper.*",
+    "kokoro.*",
     "piper.*",
     "ollama.*",
+    "twilio.*",
 ]
 ignore_missing_imports = true

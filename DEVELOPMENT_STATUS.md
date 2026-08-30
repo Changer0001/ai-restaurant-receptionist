@@ -1,8 +1,10 @@
 # Development Status
 
-**Phases 1–4 complete.** Foundation, restaurant management API, RAG
-knowledge base, and the AI conversation engine are built, tested, and
-verified. Phase 5 (voice: Twilio + STT/TTS wiring) is next.
+**Phases 1–5 complete.** Foundation, restaurant management API, RAG
+knowledge base, the AI conversation engine, and now voice (Twilio +
+local STT/TTS wired into a live call) are built, tested, and verified.
+Phase 6 (actually sending the SMS/email notifications already queued)
+is next.
 
 ## ✅ Phase 1 — Foundation
 
@@ -78,9 +80,71 @@ verified. Phase 5 (voice: Twilio + STT/TTS wiring) is next.
 - Ordering intent and explicit "let me speak to a person" requests
   transfer immediately without the AI attempting to take an order
 
+## ✅ Phase 5 — Voice: Twilio + Local STT/TTS
+
+- `app/audio/codec.py` — a from-scratch, numpy-vectorized G.711 μ-law
+  codec (encode/decode), linear resampling, and WAV wrapping. Not
+  stdlib `audioop`, which is deprecated and removed in Python 3.13
+- `app/audio/vad.py` — `TurnDetector`: energy-threshold silence
+  detection for turn-taking (a documented, deliberate simplification
+  vs. a trained VAD model — see docs/roadmap.md), with a
+  `max_utterance_ms` safety cap so a caller who never stops talking
+  can't hold the buffer open forever
+- Real Twilio webhook signature validation
+  (`app/providers/telephony/twilio_provider.py`, using Twilio's own
+  `RequestValidator`) — Phase 1's version was fully fake (see Bugs
+  Fixed below)
+- `app/providers/telephony/twiml.py` — TwiML built with Twilio's own
+  SDK (`VoiceResponse`/`Connect`), not string concatenation, to avoid
+  escaping bugs; uses `<Connect><Stream>` (bidirectional Media
+  Streams), not `<Gather input="speech">`, so STT stays local rather
+  than going through Twilio's own cloud speech recognition
+- `app/providers/tts/kokoro_provider.py` and `piper_provider.py` —
+  real local TTS providers behind the existing `TTSProvider`
+  interface (widened to return `(pcm_bytes, sample_rate)`, since a
+  caller can't resample without knowing the native rate)
+- `app/voice/session.py` — `CallSession`, the per-call orchestrator:
+  buffers caller audio, runs STT → the Phase 4 conversation engine →
+  TTS on each detected turn, and streams the response back. No
+  barge-in: while the AI's own response is playing, inbound audio is
+  ignored until an estimated "speaking until" timestamp (computed from
+  the outgoing audio's actual duration) elapses — Twilio's Media
+  Streams `mark` event would give an exact signal instead of an
+  estimate; using the estimate is a deliberate MVP scope-down (see
+  docs/roadmap.md)
+- `app/api/endpoints/twilio_webhooks.py` — `POST /voice` (looks up the
+  restaurant by the dialed Twilio number, creates the `Call` row,
+  returns Media Streams TwiML), `POST /status` (finalizes the call as
+  a backstop if the WebSocket ever disconnects abnormally),
+  `POST /recording`, `POST /transfer/{call_sid}`, and the
+  `WEBSOCKET /media-stream/{call_sid}` handler itself — mounted outside
+  `/api` (Twilio calls these, not the dashboard), every POST validated
+  against its real Twilio signature
+- `app/services/restaurant_service.get_restaurant_by_phone_number()` —
+  the "Twilio number → restaurant_id" lookup at the center of this
+  system's multi-tenancy for voice, which Phase 2 never actually built
+- `app/services/call_service.py` — `Call`/`CallTranscript`/`CallEvent`
+  persistence, including `ensure_call_finalized_from_status()`, an
+  idempotent backstop so a call is never left open forever if the
+  WebSocket disconnects without `CallSession.end()` running
+- Live-call transfer is fully wired end-to-end, not just the data flag
+  that was in place after Phase 4: when the engine signals
+  `should_transfer`, `CallSession` closes the Media Stream, which ends
+  the TwiML `<Connect>` verb and lets Twilio fall through to the
+  `<Redirect>` already queued to `/transfer/{call_sid}` — which dials
+  the restaurant's transfer number or hangs up based on what the `Call`
+  row's `was_transferred` flag says happened. What was tracked as a
+  separate future phase in Phase 4's status is complete as of this phase.
+- `docker-compose.yml`/`Dockerfile` — removed the API's direct
+  host port mapping (it bypassed Nginx and could let a caller spoof
+  `X-Forwarded-Proto` to defeat signature validation) and added
+  uvicorn's `--proxy-headers` so `request.url` reports the `https://`
+  scheme Twilio actually signed against rather than Nginx's internal
+  `http://` connection to the API
+
 ## Test Suite
 
-**96 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
+**159 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
 `app/` and `tests/`. Runs entirely against in-memory SQLite (via
 `StaticPool`), an isolated in-memory ChromaDB per test (unique
 collection name per test — see the note in `conftest.py`'s `vector_db`
@@ -103,6 +167,21 @@ AI attempting to take the order, and escalation (both explicit "human"
 requests and sentiment-based) short-circuiting before intent
 classification even runs.
 
+Phase 5 additionally covers: μ-law codec round-tripping (all 256 byte
+values, modulo the universal, benign dual-zero-representation quirk),
+resampling and WAV wrapping, turn detection (silence hangover, the
+`max_utterance_ms` safety cap), Twilio signature validation with real
+computed signatures (and rejection of a missing/bad one — the exact
+class of bug Phase 1 shipped), TwiML generation including XML escaping,
+`Call` persistence and finalization (including the abnormal-disconnect
+backstop), the full `CallSession` turn loop (greeting, no-barge-in,
+FAQ answering, a complete reservation flow, order-request transfer,
+outcome tracking) driven directly against scripted STT/LLM/TTS fakes,
+and an end-to-end test that drives the actual
+`/media-stream/{call_sid}` WebSocket protocol (connect → start → real
+μ-law audio frames → stop) and verifies both the audio returned over
+the wire and the `Call` row's final state in the database.
+
 ## Bugs Fixed Along the Way
 
 Phase 1's foundation had several defects that would have surfaced the
@@ -123,16 +202,45 @@ model list — a holiday question (see docs/roadmap.md) is deliberately
 excluded from the deterministic hours path rather than silently
 answered with regular weekly hours that may not apply that day.
 
+Found during Phase 5 — the most serious of the session so far:
+**Twilio webhook signature validation was completely fake**
+(`return signature is not None`, i.e. it accepted literally any
+non-empty string as a valid signature). Rebuilt against Twilio's real
+`RequestValidator`, and the `TelephonyProvider.validate_webhook_signature`
+interface itself was fixed alongside it — its original shape,
+`(signature, request_body)`, doesn't even match how Twilio signs
+requests (URL + form params, not the body). Also found: `faster-whisper`'s
+`Segment` object has no `.confidence` attribute at all — Phase 1's STT
+code read `segment.confidence` and would have raised `AttributeError`
+on every real transcription, never having been exercised end-to-end;
+fixed using `math.exp(segment.avg_logprob)` as a confidence proxy, and
+its `model.transcribe()` call (synchronous, with a generator that does
+lazy inference on iteration) was never wrapped in `asyncio.to_thread`,
+so it would have blocked the event loop on every real utterance — fixed
+alongside it. `pyproject.toml` pinned `faster-whisper==0.10.0` (fails to
+build at all — an old `av` dependency version with no prebuilt wheel)
+and `piper-tts==1.2.0` (a version with a completely different,
+incompatible API from what any code could reasonably be written
+against); both verified against real downloaded wheels and bumped.
+`kokoro` was never added to dependencies despite `KokoroTTSProvider`
+needing it, and its config used `KOKORO_LANGUAGE="en"` where Kokoro
+actually requires single-letter codes (`"a"` for American English) plus
+a named voice, which has no default. `docker-compose.yml` exposed the
+API's port directly to the host, bypassing Nginx entirely — besides
+contradicting the "AI services aren't directly exposed" requirement,
+this would let a caller spoof `X-Forwarded-Proto` to defeat signature
+validation; removed, with `--proxy-headers` added to uvicorn so
+`request.url` reports the scheme Twilio actually signed against.
+`CallSession.start()` persisted the greeting to the DB transcript but
+never added it to the engine's own in-memory conversation history,
+meaning the model's own history-aware prompts had no idea a greeting
+had been spoken; found via a failing test, fixed by recording it in
+both places.
+
 ## Not Yet Built (By Design — Later Phases)
 
-- Voice call handling: Twilio webhooks, STT/TTS wired into a live call,
-  the call session that feeds transcripts into the Phase 4 engine and
-  speaks its responses back (Phase 5)
 - Actually sending the SMS/email notifications Phase 4 already queues,
   plus a proper background worker for them (Phase 6)
-- Actually transferring a call via Twilio when the engine signals
-  `should_transfer` (Phase 7) — the signal exists now, the phone action
-  doesn't yet
 - React admin dashboard beyond the Phase 1 skeleton (Phase 8)
 - Prometheus business metrics, Grafana dashboards beyond the Phase 1
   scaffolding (Phase 9)
@@ -168,6 +276,10 @@ mypy app/
 - `backend/app/services/knowledge_service.py` — RAG ingestion/retrieval
 - `backend/app/conversation/engine.py` — the AI conversation state machine
 - `backend/app/prompts/` — versioned prompt templates
+- `backend/app/voice/session.py` — the per-call voice orchestrator
+- `backend/app/api/endpoints/twilio_webhooks.py` — Twilio HTTP webhooks
+  and the Media Streams WebSocket
+- `backend/app/audio/codec.py` — the G.711 μ-law codec
 - `docker-compose.yml` — full local stack
 - `docs/architecture.md` — system design and decision log
 - `docs/roadmap.md` — documented gaps and future work

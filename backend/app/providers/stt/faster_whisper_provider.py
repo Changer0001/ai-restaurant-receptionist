@@ -5,8 +5,10 @@ Local speech-to-text using Faster-Whisper (OpenAI Whisper optimized)
 https://github.com/guillaumekln/faster-whisper
 """
 
+import asyncio
 import io
 import logging
+import math
 from typing import Tuple
 
 from faster_whisper import WhisperModel
@@ -59,34 +61,46 @@ class FasterWhisperSTTProvider(STTProvider):
 
     async def transcribe(self, audio: bytes) -> Tuple[str, float]:
         """Transcribe audio to text."""
-        try:
-            model = await self._load_model()
+        model = await self._load_model()
+        # WhisperModel.transcribe() is synchronous, and the actual model
+        # inference happens lazily as its returned generator is iterated
+        # — not when transcribe() is first called. Both the call and the
+        # iteration must run off the event loop, so the whole thing goes
+        # through one asyncio.to_thread() rather than just wrapping the
+        # initial call.
+        return await asyncio.to_thread(self._transcribe_sync, model, audio)
 
-            # Convert bytes to audio file-like object
+    def _transcribe_sync(self, model: WhisperModel, audio: bytes) -> Tuple[str, float]:
+        try:
             audio_file = io.BytesIO(audio)
 
-            # Transcribe
-            segments, info = model.transcribe(
+            segments, _info = model.transcribe(
                 audio_file,
                 language="en",
                 condition_on_previous_text=True,
             )
 
-            # Collect segments and average confidence
             text_parts = []
             confidences = []
 
             for segment in segments:
                 text_parts.append(segment.text)
-                confidences.append(segment.confidence)
+                # Segment has no .confidence attribute — avg_logprob is
+                # the average per-token log-probability faster-whisper
+                # actually exposes. exp() converts it back to a
+                # roughly-[0,1]-scaled confidence proxy (a standard
+                # approach for Whisper-family models, not an exact
+                # calibrated probability).
+                confidences.append(math.exp(segment.avg_logprob))
 
             transcribed_text = " ".join(text_parts).strip()
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
-            logger.debug(f"Transcribed: {transcribed_text[:100]}... (confidence: {avg_confidence:.2f})")
+            logger.debug(
+                f"Transcribed: {transcribed_text[:100]}... (confidence: {avg_confidence:.2f})"
+            )
 
             return transcribed_text, avg_confidence
-
         except Exception as e:
             logger.error(f"Whisper transcription error: {e}")
             raise

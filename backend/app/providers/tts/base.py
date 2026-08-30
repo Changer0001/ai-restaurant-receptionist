@@ -13,7 +13,7 @@ class TTSProvider(ABC):
     """
 
     @abstractmethod
-    async def synthesize(self, text: str, language: str = "en") -> bytes:
+    async def synthesize(self, text: str, language: str = "en") -> tuple[bytes, int]:
         """
         Synthesize text to speech audio.
 
@@ -22,7 +22,12 @@ class TTSProvider(ABC):
             language: Language code (e.g., "en", "es")
 
         Returns:
-            Audio bytes (WAV, PCM, etc.)
+            (audio_bytes, sample_rate) — audio_bytes is raw PCM16 mono
+            (no WAV/container header), at the provider's native sample
+            rate. A single well-defined format rather than "WAV, PCM,
+            etc." — callers that need a different rate (e.g. 8kHz for
+            Twilio) resample explicitly using the returned sample_rate,
+            rather than guessing it.
         """
         pass
 

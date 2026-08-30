@@ -6,7 +6,7 @@ Abstracts away provider-specific details (Twilio, SIP, etc.)
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 
 class TelephonyProvider(ABC):
@@ -21,14 +21,20 @@ class TelephonyProvider(ABC):
     async def validate_webhook_signature(
         self,
         signature: str,
-        request_body: str,
+        url: str,
+        params: Mapping[str, str],
     ) -> bool:
         """
         Validate webhook signature for security.
 
         Args:
             signature: Signature header from provider
-            request_body: Raw request body
+            url: The exact public URL the provider called (Twilio signs
+                over the full callback URL, not the request body — a
+                webhook payload has no body-hash-based signing scheme
+                the way e.g. Stripe's does)
+            params: The webhook's form/query parameters as a flat
+                string-keyed mapping
 
         Returns:
             True if signature is valid

@@ -5,7 +5,7 @@ Integration with Twilio Voice API for PSTN connectivity.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
@@ -35,22 +35,27 @@ class TwilioTelephonyProvider(TelephonyProvider):
     async def validate_webhook_signature(
         self,
         signature: str,
-        request_body: str,
+        url: str,
+        params: Mapping[str, str],
     ) -> bool:
         """
-        Validate Twilio webhook signature.
+        Validate a Twilio webhook's X-Twilio-Signature.
 
-        Args:
-            signature: X-Twilio-Signature header
-            request_body: Raw request body
-
-        Returns:
-            True if valid
+        Twilio computes an HMAC-SHA1 over the exact callback URL it was
+        configured to call, concatenated with the sorted request
+        parameters — RequestValidator.validate() implements that
+        comparison. `url` MUST be the exact public URL (scheme, host,
+        path, query string) Twilio actually invoked; behind a reverse
+        proxy (Nginx in this project's deployment) that has to be
+        reconstructed from PUBLIC_BASE_URL plus the request path, not
+        read off the request as FastAPI sees it internally (which
+        would be the proxy's internal http://api:8000/... URL, not
+        the https://public-domain/... one Twilio signed against).
         """
+        if not signature:
+            return False
         try:
-            # Note: Twilio validation expects URL in the validator
-            # This is a simplified version - implement full validation per Twilio docs
-            return signature is not None
+            return bool(self.validator.validate(url, dict(params), signature))
         except Exception as e:
             logger.error(f"Twilio signature validation error: {e}")
             return False
@@ -93,7 +98,9 @@ class TwilioTelephonyProvider(TelephonyProvider):
     async def send_digits(self, call_sid: str, digits: str) -> bool:
         """Send DTMF digits to a call."""
         try:
-            self.client.calls(call_sid).update(twiml=f'<Response><Play digits="{digits}"/></Response>')
+            self.client.calls(call_sid).update(
+                twiml=f'<Response><Play digits="{digits}"/></Response>'
+            )
             logger.info(f"Sent digits {digits} to call {call_sid}")
             return True
         except Exception as e:

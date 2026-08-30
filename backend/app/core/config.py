@@ -82,7 +82,15 @@ class Settings(BaseSettings):
     # ========================================================================
     TTS_PROVIDER: str = "kokoro"
     KOKORO_DEVICE: str = "cuda"
-    KOKORO_LANGUAGE: str = "en"
+    # Kokoro's own single-letter language codes (not ISO 639-1) — 'a' is
+    # American English, 'b' British English, 'j' Japanese, 'z' Chinese,
+    # etc. per hexgrad/Kokoro-82M's KPipeline. "en" is not a valid value.
+    KOKORO_LANG_CODE: str = "a"
+    # A specific named voice, not just a language — Kokoro has no
+    # "default voice per language," every synthesis call must name one.
+    # af_heart is Kokoro's commonly-documented American English voice.
+    KOKORO_VOICE: str = "af_heart"
+    PIPER_VOICE_MODEL_PATH: str = "/models/piper/en_US-lessac-medium.onnx"
 
     # ========================================================================
     # TWILIO

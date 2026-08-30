@@ -17,6 +17,7 @@ from prometheus_client import make_asgi_app
 from sqlalchemy import text
 
 from app.api import routes
+from app.api.endpoints import twilio_webhooks
 from app.core.cache import close_redis, init_redis
 from app.core.config import settings
 from app.db.base import Base
@@ -152,6 +153,14 @@ async def readiness_check(response: Response):
 
 # Include API routes
 app.include_router(routes.router, prefix=settings.API_V1_PREFIX)
+
+# Twilio webhooks live outside /api — they're called by Twilio's
+# platform directly, authenticated by X-Twilio-Signature rather than the
+# JWT scheme the rest of the API uses, and match the exact webhook paths
+# configured in Twilio's console / .env's WEBHOOK_BASE_PATH.
+app.include_router(
+    twilio_webhooks.router, prefix=f"{settings.WEBHOOK_BASE_PATH}/twilio", tags=["Twilio Webhooks"]
+)
 
 
 @app.get("/", tags=["Root"])

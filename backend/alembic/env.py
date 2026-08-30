@@ -20,8 +20,8 @@ from alembic import context
 
 # Import the app's settings and metadata
 from app.core.config import settings
-from app.db.base import Base
 from app.db import models  # noqa: F401 - registers all model classes on Base.metadata
+from app.db.base import Base
 
 # Alembic Config object, provides access to values in alembic.ini
 config = context.config

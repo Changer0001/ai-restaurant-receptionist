@@ -37,6 +37,36 @@ DOCX) is straightforward to slot into
 `app/api/endpoints/knowledge.py`'s upload handler without touching the
 chunking/embedding/storage pipeline downstream of it.
 
+### Energy-threshold voice activity detection
+
+`app/audio/vad.py`'s `TurnDetector` decides a caller has finished
+speaking using a simple energy threshold plus a silence hangover
+window, not a trained VAD model (e.g. Silero VAD). It's a real,
+working implementation — not a stub — but it will trigger falsely on
+a caller pausing mid-sentence, background noise crossing the
+threshold, or a quiet talker never crossing it at all.
+
+**To close the gap:** swap `TurnDetector.add_frame()`'s energy
+comparison for a small trained VAD model's frame-level speech
+probability; the rest of `CallSession` (which only depends on
+`add_frame() -> bool` and `pop_utterance() -> np.ndarray`) would not
+need to change.
+
+### No barge-in (estimated, not exact, playback-end timing)
+
+`CallSession` has no interruption support: while the AI's response is
+playing, inbound audio is ignored until an estimated "speaking until"
+timestamp — computed from the outgoing audio's own duration — elapses.
+Twilio's Media Streams protocol has a `mark` event that echoes back
+once Twilio has actually finished playing a named chunk of audio,
+which would give an exact signal instead of an estimate (and would be
+the basis for real barge-in: stop synthesizing/playing as soon as
+inbound speech is detected mid-response). Using the estimate is a
+deliberate MVP scope-down — implementing it is straightforward
+(send a `mark` after each outbound audio chunk, wait for the matching
+event instead of a timestamp) but barge-in itself (interrupting speech
+that's already mid-flight) is a larger feature.
+
 ### Reservation availability
 
 Reservations created by this system are *requests*, not confirmed

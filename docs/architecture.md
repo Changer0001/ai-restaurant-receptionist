@@ -458,6 +458,69 @@ the same turn) — at that point, native function-calling (which recent
 Ollama versions and many models support) may earn its added complexity.
 For the tool surface Phases 4-7 need, it doesn't yet.
 
+### Why Media Streams (`<Connect><Stream>`), not `<Gather input="speech">`
+
+Twilio offers two ways to get a caller's speech into an application:
+`<Gather input="speech">`, which runs Twilio's own cloud STT and hands
+back the transcript, or `<Connect><Stream>` (Media Streams), which
+opens a raw bidirectional audio WebSocket and leaves STT entirely to
+the application. This project uses only Media Streams — `<Gather>`
+would route every caller's speech through Twilio's cloud, directly
+contradicting the "local-first AI inference" principle this whole
+system is built around (see Key Architectural Principle #1). Twilio's
+role here is PSTN connectivity only: getting audio bytes on and off
+the phone network, never doing anything with their content.
+
+`<Connect>`, not `<Start>`, matters too: `<Start><Stream>` is
+inbound-only (it can tap a call's audio for logging/analytics without
+taking control of it), while `<Connect><Stream>` hands the whole call
+over to the WebSocket, which is required to play synthesized speech
+back to the caller at all.
+
+### Why a hand-written μ-law codec, not `audioop`
+
+Twilio's Media Streams protocol carries audio as G.711 μ-law, 8kHz,
+base64-encoded inside each `media` event. Python's stdlib `audioop`
+module can decode/encode this, but it's deprecated as of Python 3.11
+and removed entirely in 3.13 (PEP 594) — building a new system against
+it in 2025+ would mean either pinning to an aging Python version or
+inheriting a removal deadline on day one. `app/audio/codec.py`
+implements the encode/decode/resample logic directly with numpy
+instead: it's a well-documented, standardized codec (ITU-T G.711) with
+no ambiguity in the transform, and a vectorized numpy implementation
+processes a frame in the same handful of array operations `audioop`
+would have used internally.
+
+### Why call-transfer timing is an estimate, not an exact signal
+
+See docs/roadmap.md's "No barge-in" entry for the full reasoning —
+noted here because it's a call-flow design decision, not just a gap:
+`CallSession` decides when it's safe to start listening again after
+speaking using the outgoing audio's own computed duration plus a fixed
+tail buffer, rather than waiting for Twilio's Media Streams `mark`
+event (which echoes back once audio has actually finished playing on
+the caller's device). The estimate is simpler to reason about for an
+MVP with no barge-in support at all — there's nothing to interrupt, so
+exact timing only affects how promptly listening resumes, not
+correctness of what's said.
+
+### Why webhook signature validation is the entire auth boundary for voice
+
+Every other endpoint in this API sits behind the JWT + tenant-isolation
+dependencies described above. `app/api/endpoints/twilio_webhooks.py`
+cannot use them — an inbound caller has no account, and Twilio itself
+isn't a tenant user — so `X-Twilio-Signature` validation (via Twilio's
+own `RequestValidator`, computed over the exact URL and form params of
+the request) is the only thing standing between this router and a
+forged webhook that could create fictitious calls, trigger a transfer
+to an arbitrary number, or manipulate a call record. This is why an
+invalid or missing signature is treated as seriously as it is (403,
+logged, request never touches the database) and why it's covered by a
+dedicated test file (`tests/test_twilio_signature.py`) built
+specifically to catch a validator that accepts more than it should —
+which is exactly what shipped in Phase 1 before this was fixed (see
+DEVELOPMENT_STATUS.md).
+
 ---
 
 For implementation details, see:
