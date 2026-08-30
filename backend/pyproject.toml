@@ -1,0 +1,146 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-restaurant-receptionist"
+version = "0.1.0"
+description = "Production-ready AI restaurant receptionist with local-first architecture"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Burak Yilmaz", email = "yilmmazburak@gmail.com"}
+]
+
+dependencies = [
+    # Web Framework
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    "python-multipart==0.0.6",
+
+    # Database
+    "sqlalchemy==2.0.23",
+    "psycopg[binary]==3.17.0",
+    "alembic==1.12.1",
+
+    # Async
+    "aioredis==2.0.1",
+    "redis==5.0.1",
+
+    # Data Validation
+    "pydantic==2.5.0",
+    "pydantic-settings==2.1.0",
+
+    # Security
+    "python-jose[cryptography]==3.3.0",
+    "bcrypt==4.1.1",
+    "passlib==1.7.4",
+
+    # HTTP Client
+    "httpx==0.25.1",
+    "aiohttp==3.9.1",
+
+    # AI/ML
+    "ollama==0.1.0",
+    "faster-whisper==0.10.0",
+    "openai-whisper==20231117",  # For compatibility
+    "transformers==4.36.0",
+    "torch==2.1.1",
+    "numpy==1.26.3",
+
+    # Vector DB
+    "chromadb==0.4.21",
+
+    # TTS
+    "piper-tts==1.2.0",
+
+    # Audio Processing
+    "librosa==0.10.0",
+    "soundfile==0.12.1",
+    "wave-stream==0.1.0",
+
+    # Telephony
+    "twilio==8.10.0",
+
+    # Monitoring
+    "prometheus-client==0.19.0",
+
+    # Logging
+    "python-json-logger==2.0.7",
+
+    # Utilities
+    "python-dotenv==1.0.0",
+    "pyyaml==6.0.1",
+    "tenacity==8.2.3",
+    "slack-sdk==3.26.1",  # For future Slack integration
+
+    # Email
+    "aiosmtplib==3.0.1",
+    "email-validator==2.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "pytest-cov==4.1.0",
+    "pytest-mock==3.12.0",
+    "black==23.12.0",
+    "ruff==0.1.8",
+    "mypy==1.7.1",
+    "types-redis==4.6.0.11",
+    "types-aiofiles==23.2.0",
+    "httpx[cli]==0.25.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=html --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+select = [
+    "E",   # Pycodestyle errors
+    "W",   # Pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+]
+ignore = ["E501", "W503"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Too strict for MVP, enable later
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "faster_whisper.*",
+    "piper.*",
+    "ollama.*",
+]
+ignore_missing_imports = true

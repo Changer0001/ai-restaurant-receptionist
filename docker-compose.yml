@@ -1,0 +1,245 @@
+version: '3.9'
+
+services:
+  # ============================================================================
+  # INFRASTRUCTURE
+  # ============================================================================
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: restaurant_ai_postgres
+    environment:
+      POSTGRES_USER: restaurantai
+      POSTGRES_PASSWORD: restaurantai
+      POSTGRES_DB: restaurantai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restaurantai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: restaurant_ai_redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    container_name: restaurant_ai_chromadb
+    environment:
+      CHROMA_DB_IMPL: duckdb
+      PERSIST_DIRECTORY: /chroma/data
+    ports:
+      - "8001:8000"
+    volumes:
+      - chromadb_data:/chroma/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # ============================================================================
+  # AI SERVICES
+  # ============================================================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: restaurant_ai_ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./infrastructure/ollama/Modelfile:/Modelfile
+    # GPU configuration - uncomment if you have NVIDIA GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app-network
+
+  # ============================================================================
+  # BACKEND API
+  # ============================================================================
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: restaurant_ai_api
+    environment:
+      - DATABASE_URL=postgresql://restaurantai:restaurantai@postgres:5432/restaurantai
+      - REDIS_URL=redis://redis:6379/0
+      - VECTOR_DB_URL=http://chromadb:8000
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    # GPU access for local AI inference
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # ============================================================================
+  # MONITORING
+  # ============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: restaurant_ai_prometheus
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: restaurant_ai_grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - app-network
+
+  # ============================================================================
+  # FRONTEND
+  # ============================================================================
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: restaurant_ai_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+    networks:
+      - app-network
+    command: npm run dev
+
+  # ============================================================================
+  # REVERSE PROXY
+  # ============================================================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: restaurant_ai_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_cache:/var/cache/nginx
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - app-network
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  chromadb_data:
+    driver: local
+  ollama_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  nginx_cache:
+    driver: local
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+
+networks:
+  app-network:
+    driver: bridge
