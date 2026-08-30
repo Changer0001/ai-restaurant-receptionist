@@ -72,8 +72,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-      - ./infrastructure/ollama/Modelfile:/Modelfile
-    # GPU configuration - uncomment if you have NVIDIA GPU
+    # GPU reservation below requires the NVIDIA Container Toolkit (see
+    # docs/setup.md). Remove the `deploy:` block entirely to run on CPU.
     deploy:
       resources:
         reservations:

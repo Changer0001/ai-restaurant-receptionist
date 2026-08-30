@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "qwen3:8b"
     OLLAMA_REQUEST_TIMEOUT: int = 60
 
+    # Separate embedding model — embedding models are purpose-built and
+    # much smaller than chat models; using OLLAMA_MODEL for both would
+    # waste VRAM and give worse embeddings than a dedicated model.
+    EMBEDDING_MODEL: str = "nomic-embed-text"
+
     # ========================================================================
     # SPEECH-TO-TEXT
     # ========================================================================
@@ -145,6 +150,10 @@ class Settings(BaseSettings):
     RAG_CHUNK_OVERLAP: int = 50
     RAG_RETRIEVAL_TOP_K: int = 5
     RAG_RELEVANCE_THRESHOLD: float = 0.6
+    # Knowledge documents are restaurant reference text (menus, policies,
+    # FAQs) — 2MB is generous headroom over that while still bounding
+    # worst-case chunking/embedding work per upload.
+    MAX_KNOWLEDGE_UPLOAD_BYTES: int = 2_000_000
 
     # ========================================================================
     # CALL RECORDING

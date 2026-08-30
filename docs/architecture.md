@@ -365,6 +365,39 @@ Queue non-bottleneck operations (TTS) to avoid blocking.
 - **Production-ready**: Used in production systems
 - **Scalable**: Can migrate to Qdrant later
 
+Implementation notes from actually building it (Phase 3):
+
+- **Embeddings are computed by the app, not ChromaDB.** ChromaDB's
+  default embedding function silently downloads a small ONNX model from
+  the internet on first use — contrary to this project's local-first,
+  Ollama-centric design. Instead, `EmbeddingProvider` (same abstraction
+  pattern as `LLMProvider`/`STTProvider`) wraps Ollama's
+  `/api/embeddings` endpoint with a separate, smaller model
+  (`nomic-embed-text` by default, configurable via `EMBEDDING_MODEL`) —
+  deliberately not the chat model, since embedding models are
+  purpose-built and much smaller.
+- **Single shared collection, not one per restaurant.** Every chunk
+  carries `restaurant_id` in its metadata, and every query/delete filters
+  on it server-side via Chroma's `where` clause — never in application
+  code after the fact. One collection is simpler to operate (no
+  proliferating per-tenant collections as restaurants are added) and
+  matches how the spec describes tenant isolation for RAG (metadata
+  filtering, not physical separation).
+- **Cosine distance**, set via `metadata={"hnsw:space": "cosine"}` at
+  collection creation — bounded to `[0, 2]` with a clean similarity
+  conversion (`similarity = 1 - distance`), which is what
+  `RAG_RELEVANCE_THRESHOLD` filtering is built on.
+- **Multi-condition `where` filters need an explicit `$and`.** ChromaDB
+  0.4.x rejects `{"restaurant_id": x, "document_id": y}` (implicit AND
+  across dict keys) with "Expected where to have exactly one operator" —
+  it must be `{"$and": [{"restaurant_id": x}, {"document_id": y}]}`.
+- **`EphemeralClient()` instances share backing state within a process**
+  when given the same collection name — a real gotcha hit while writing
+  tests (two "isolated" test clients were silently reading and writing
+  the same in-memory collection). The test suite works around this by
+  giving each test a uniquely-named collection; production only ever
+  runs one `HttpClient` per process, so this doesn't affect it.
+
 ### Why PostgreSQL?
 
 - **ACID**: Reservations must be transactional

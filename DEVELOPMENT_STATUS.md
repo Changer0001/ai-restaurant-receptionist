@@ -1,313 +1,131 @@
-# Development Status - Phase 1 Complete ✓
+# Development Status
 
-## Completed: Foundation (Phase 1)
+**Phases 1–3 complete.** Foundation, restaurant management API, and RAG
+knowledge base are built, tested, and verified. Phase 4 (AI conversation
+system) is next.
 
-### ✅ Project Setup
-- [x] New GitHub repository structure
-- [x] Git initialized with initial commits
-- [x] Comprehensive .gitignore
-- [x] MIT License
+## ✅ Phase 1 — Foundation
 
-### ✅ Backend Foundation
-- [x] FastAPI application skeleton
-- [x] Pydantic configuration management
-- [x] SQLAlchemy ORM setup
-- [x] Async database session management
-- [x] Database models (15+ core models)
-- [x] Multi-tenant architecture (restaurant_id isolation)
-- [x] Provider abstractions:
-  - [x] LLM Provider (base + Ollama implementation)
-  - [x] STT Provider (base + Faster-Whisper implementation)
-  - [x] TTS Provider (base class)
-  - [x] Telephony Provider (base + Twilio implementation)
-- [x] Cache/Redis integration
-- [x] Health check endpoints (/health, /ready)
+- FastAPI application, Pydantic configuration, async SQLAlchemy ORM
+- 12 database models with real multi-tenant FK constraints
+  (`TenantMixin.restaurant_id` → `restaurants.id`, `ondelete="CASCADE"`)
+- Provider abstractions: `LLMProvider` (Ollama), `STTProvider`
+  (Faster-Whisper), `TTSProvider` (interface only — implementation is
+  Phase 5), `TelephonyProvider` (Twilio)
+- Docker Compose stack: PostgreSQL, Redis, ChromaDB, Ollama, Nginx,
+  Prometheus, Grafana
+- `/health` and `/ready` — `/ready` genuinely checks Postgres, Redis,
+  Ollama, and the vector DB, and returns a real 503 when any are down
 
-### ✅ Frontend Foundation
-- [x] React + TypeScript + Vite setup
-- [x] Tailwind CSS configured
-- [x] Basic App component
-- [x] tsconfig and build configuration
-- [x] Dockerfile for production build
+## ✅ Phase 2 — Restaurant Management API
 
-### ✅ Infrastructure
-- [x] Docker Compose with all services:
-  - [x] PostgreSQL 16
-  - [x] Redis 7
-  - [x] ChromaDB (vector DB)
-  - [x] Ollama (LLM inference)
-  - [x] Nginx (reverse proxy)
-  - [x] Prometheus (metrics)
-  - [x] Grafana (visualization)
-- [x] Nginx configuration with routing rules
-- [x] PostgreSQL initialization scripts
-- [x] Prometheus configuration
-- [x] GPU support configured in docker-compose
+- JWT auth: `POST /api/auth/{register,login,refresh}`, `GET /api/auth/me`
+  — access/refresh tokens are separately typed (a refresh token can't be
+  replayed as an access token), and role/tenant claims are re-read from
+  the database on every request rather than trusted from the token
+- Restaurant CRUD, weekly hours (full-week PUT replace), FAQ CRUD
+- Tenant isolation (`app/api/deps.py`): a restaurant-scoped request whose
+  path `restaurant_id` doesn't match the caller's own returns 404 (never
+  403 — doesn't confirm the ID exists to a caller who doesn't own it),
+  enforced independently of anything the frontend sends
+- Alembic migrations, generated and verified (upgrade / downgrade /
+  zero-drift re-check)
 
-### ✅ Documentation
-- [x] Comprehensive README.md
-- [x] Architecture documentation (architecture.md)
-- [x] Database schema documentation (database.md)
-- [x] Setup guide (setup.md)
-- [x] Environment configuration template (.env.example)
+## ✅ Phase 3 — RAG Knowledge Base
 
-### ✅ Testing & Quality
-- [x] Project structure follows best practices
-- [x] Type hints throughout codebase
-- [x] Modular architecture ready for expansion
-- [x] No hardcoded secrets or credentials
+- `EmbeddingProvider` abstraction + `OllamaEmbeddingProvider`
+  (`nomic-embed-text` by default, configurable via `EMBEDDING_MODEL`) —
+  a separate, smaller model from the chat LLM
+- Real ChromaDB-backed `VectorDB` (`app/rag/vector_db.py`): cosine
+  distance, restaurant_id-filtered `where` on every query and delete,
+  embeddings computed by the app (not Chroma's own default model, which
+  would silently pull from the internet)
+- Sentence-aware chunking (`app/rag/chunking.py`) with configurable
+  `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`
+- `app/services/knowledge_service.py`: ingest (chunk → embed → store →
+  persist DB row with `vector_ids`), list, delete, reindex, and
+  `search_knowledge()` — the function Phase 4's AI layer will call to
+  ground its answers. Results below `RAG_RELEVANCE_THRESHOLD` are
+  dropped: an ungrounded question must come back with **zero** results,
+  not the least-bad match, so the AI layer knows to say "I don't have
+  that information" rather than improvise
+- Endpoints: `GET/POST .../knowledge/upload`, `DELETE
+  .../knowledge/{id}`, `POST .../knowledge/{id}/reindex` — upload accepts
+  UTF-8 plain text (`.txt`/`.md`); PDF/DOCX parsing is not implemented
+  (see docs/roadmap.md)
 
-## Database Models Implemented
+## Test Suite
 
-### Tenant Models (Multi-tenant)
-- [x] `Restaurant` - Primary tenant
-- [x] `RestaurantPhoneNumber` - Twilio mapping
-- [x] `RestaurantHours` - Operating hours
-- [x] `RestaurantFAQ` - Knowledge base FAQs
-- [x] `RestaurantKnowledgeDocument` - RAG documents
+**47 passing** (`backend/tests/`), zero `ruff`/`mypy` findings across
+`app/` and `tests/`. Runs entirely against in-memory SQLite (via
+`StaticPool`) and an isolated in-memory ChromaDB per test (unique
+collection name per test — see the note in `conftest.py`'s `vector_db`
+fixture about `EphemeralClient` sharing backing state across instances
+in the same process) with a deterministic fake embedding provider
+(`tests/fakes.py`) — never the real Postgres, Redis, ChromaDB, or Ollama.
 
-### Operations Models
-- [x] `Call` - Call metadata and outcomes
-- [x] `CallTranscript` - Turn-by-turn conversation logs
-- [x] `CallEvent` - State machine events
-- [x] `Reservation` - Reservation requests
+Coverage: password hashing/JWT correctness, auth flows, restaurant/hours/
+FAQ CRUD, cross-tenant isolation (explicitly proving restaurant A cannot
+read, write, or leak restaurant B's data through any endpoint), knowledge
+ingestion/deletion/reindexing, and RAG retrieval safety (tenant filtering
+under search, relevance-threshold cutoff, `top_k` limiting, empty results
+for an empty knowledge base).
 
-### Authentication & Audit
-- [x] `User` - User accounts with RBAC
-- [x] `AuditLog` - Compliance logging
-- [x] `Notification` - SMS/Email history
+## Bugs Fixed Along the Way
 
-## Provider Abstractions
+Phase 1's foundation had several defects that would have surfaced the
+first time each code path actually ran (see `git log` for full detail on
+the two fix commits): invalid class-definition syntax in every model,
+`Call.metadata` colliding with SQLAlchemy's reserved attribute, missing
+FK constraints, a `DATABASE_URL` scheme incompatible with the async
+engine, `aioredis` (crashes on import under Python 3.11), two nonexistent
+pinned packages (`psycopg==3.17.0`, `wave-stream==0.1.0`) that would have
+broken `pip install` outright, a `/ready` endpoint that computed but
+never applied its 503 status code, and Redis never being initialized at
+all. Also fixed during Phase 3: `docker-compose.yml` referenced a
+`./infrastructure/ollama/Modelfile` that was never created — Docker
+refuses to start a container with a nonexistent bind-mount source, which
+would have broken `docker compose up` outright.
 
-All implemented with clean interfaces for future swapping:
+## Not Yet Built (By Design — Later Phases)
 
-### LLM Provider
-- [x] Abstract `LLMProvider` interface
-- [x] `OllamaLLMProvider` implementation
-- Future: OpenAI, Anthropic, etc.
+- AI conversation / tool-calling system, system prompts (Phase 4)
+- Voice call handling: Twilio webhooks, STT/TTS wired into a live call,
+  the call state machine (Phase 5)
+- Reservation workflow, SMS/email notifications (Phase 6)
+- Ordering detection, human escalation / call transfer (Phase 7)
+- React admin dashboard beyond the Phase 1 skeleton (Phase 8)
+- Prometheus business metrics, Grafana dashboards beyond the Phase 1
+  scaffolding (Phase 9)
+- Production hardening: backups, rate limiting, secret rotation,
+  disaster recovery docs (Phase 10)
 
-### STT Provider
-- [x] Abstract `STTProvider` interface
-- [x] `FasterWhisperSTTProvider` implementation
-- Future: Google Cloud Speech, Azure Speech
-
-### TTS Provider
-- [x] Abstract `TTSProvider` interface
-- [ ] Kokoro implementation (coming Phase 5)
-- Future: ElevenLabs, Google Cloud TTS
-
-### Telephony Provider
-- [x] Abstract `TelephonyProvider` interface
-- [x] `TwilioTelephonyProvider` implementation
-- Future: SIP, FreeSWITCH, Asterisk
-
-## What's NOT in Phase 1 (By Design)
-
-- [ ] REST API endpoints (Phase 2)
-- [ ] Reservation workflow (Phase 6)
-- [ ] Voice call handling (Phase 5)
-- [ ] RAG with ChromaDB (Phase 3)
-- [ ] AI conversation system (Phase 4)
-- [ ] Admin dashboard (Phase 8)
-- [ ] Authentication endpoints (Phase 2)
-- [ ] Tests (Phase 10)
-
-## Quick Start Status
-
-✅ **Ready to run locally:**
+## Quick Start
 
 ```bash
-cd /tmp/ai-restaurant-receptionist
+cd ai-restaurant-receptionist
 docker compose up -d
-# Services will start and initialize
+docker compose exec ollama ollama pull qwen3:8b
+docker compose exec ollama ollama pull nomic-embed-text
+# API docs: http://localhost/docs
 ```
 
-All services will be accessible but without endpoints yet. Database schema is ready to be migrated.
+Running the test suite locally (no Docker required — everything runs
+against in-memory fakes):
 
-## Next Phase (Phase 2) - Restaurant Management
-
-### To Implement
-1. **Authentication Endpoints**
-   - POST /api/auth/login
-   - POST /api/auth/register
-   - POST /api/auth/refresh
-
-2. **Restaurant CRUD**
-   - GET /api/restaurants
-   - GET /api/restaurants/{id}
-   - PATCH /api/restaurants/{id}
-   - POST /api/restaurants
-
-3. **Restaurant Hours**
-   - GET /api/restaurants/{id}/hours
-   - PUT /api/restaurants/{id}/hours
-
-4. **FAQ Management**
-   - GET /api/restaurants/{id}/faqs
-   - POST /api/restaurants/{id}/faqs
-   - PATCH /api/restaurants/{id}/faqs/{faq_id}
-   - DELETE /api/restaurants/{id}/faqs/{faq_id}
-
-5. **Database Migrations**
-   - Initialize Alembic
-   - Create initial migration for all models
-   - Test migration process
-
-## Architecture Decisions Made
-
-### ✅ Ollama for Local LLM
-**Why:** Full control, privacy, no API costs, fast local inference
-**Alternative:** Could use Llama 3.1, Mistral, or cloud APIs later
-
-### ✅ ChromaDB for Vector DB
-**Why:** Simple, multi-tenant filtering, Docker-deployable
-**Alternative:** Qdrant, Pinecone, Weaviate
-
-### ✅ PostgreSQL for Primary DB
-**Why:** ACID compliance, proven, good migration support
-**Alternative:** MySQL, MariaDB (but less ideal for transactions)
-
-### ✅ FastAPI for Backend
-**Why:** Modern, async, fast, excellent for real-time apps
-**Alternative:** Django, Flask (but slower, more boilerplate)
-
-### ✅ React + Vite for Frontend
-**Why:** Fast build, modern, great DX
-**Alternative:** Vue, Svelte
-
-### ✅ Docker Compose for Local Dev
-**Why:** Simple, reproducible, single file to manage all services
-**Path to production:** Easy migration to Kubernetes
-
-## Performance Expectations
-
-### Single RTX 3090 (Current MVP)
-- **Concurrent calls:** 5-10
-- **Model load:** 
-  - Whisper Large V3: 6GB VRAM
-  - Qwen 3 8B: 8-10GB VRAM
-  - TTS: 2GB VRAM
-  - Total: ~20GB (with buffer)
-- **Latency:** 2-4s per turn (acceptable for phone)
-
-### Single RTX 4090 (Recommended)
-- **Concurrent calls:** 10-20
-- Same VRAM requirements
-- Better throughput due to higher compute
-
-## File Statistics
-
-```
-Backend:
-  - 9 Python modules (core, db, api, providers, services, schemas, rag)
-  - 14 model definitions
-  - 5 provider abstractions + implementations
-  - ~3,500 lines of code
-  
-Frontend:
-  - React TypeScript skeleton
-  - Vite configured
-  - Ready for component development
-
-Infrastructure:
-  - docker-compose.yml (complete)
-  - Nginx, PostgreSQL, Prometheus config
-  - Ready for deployment
-
-Documentation:
-  - 4 major docs (README, Architecture, Database, Setup)
-  - ~3,000 lines of documentation
-```
-
-## Testing Checklist Before Phase 2
-
-- [ ] Build Docker images successfully
-- [ ] All services start and pass health checks
-- [ ] PostgreSQL initialized with schema
-- [ ] Redis responds to pings
-- [ ] ChromaDB API accessible
-- [ ] Ollama downloads model successfully
-- [ ] Nginx routes requests correctly
-- [ ] Prometheus scrapes metrics
-- [ ] Grafana loads dashboards
-
-## Security Checklist
-
-- [x] No secrets in .gitignore
-- [x] .env.example without credentials
-- [x] Multi-tenant isolation at DB level
-- [x] JWT secret configured as env var
-- [x] CORS configuration template
-- [x] Rate limiting configuration ready
-- [x] TLS/HTTPS documented
-- [x] Audit logging model created
-- [ ] Implement actual auth (Phase 2)
-- [ ] Add security headers to Nginx (Phase 2)
-
-## Deployment Readiness
-
-### Not Production-Ready Yet
-- [ ] No HTTPS (nginx needs certs)
-- [ ] No authentication endpoints
-- [ ] No actual business logic
-- [ ] Limited monitoring/alerting
-
-### Production-Ready Foundation
-- [x] Multi-stage Docker builds
-- [x] Health checks configured
-- [x] Resource limits defined
-- [x] Logging structured
-- [x] Metrics framework ready
-- [x] Database backup strategy documented
-
-## Known Limitations
-
-1. **STT/TTS not fully integrated** - Interfaces ready, implementations in progress
-2. **No Kokoro TTS yet** - Simple TTS provider interface ready for implementation
-3. **No Twilio webhooks yet** - Telephony provider interface ready, routes not wired
-4. **No RAG yet** - Vector DB interface ready, ChromaDB client not integrated
-5. **No call state machine** - Architecture designed, implementation in Phase 5
-
-All limitations are intentional per phased development approach.
-
-## How to Continue
-
-### To start Phase 2:
 ```bash
-cd /tmp/ai-restaurant-receptionist
-
-# Create new branch for Phase 2
-git checkout -b phase/2-restaurant-management
-
-# Start implementing REST endpoints
-# See docs/setup.md for development commands
+cd backend
+pip install -e ".[dev]"
+pytest tests/ -v
+ruff check app/ tests/
+mypy app/
 ```
 
-### Testing Database:
-```bash
-docker compose exec postgres psql -U restaurantai -d restaurantai
+## Key Files
 
-# Run setup.md SQL to create test restaurant
-```
-
-## Commit History
-
-```
-7364dca - docs: add comprehensive documentation
-a0b7052 - chore: initialize project foundation
-```
-
-## Key Files to Review
-
-1. `README.md` - Project overview
-2. `backend/app/main.py` - FastAPI entry point
-3. `backend/app/db/models.py` - All database models
-4. `backend/app/core/config.py` - Configuration
-5. `docker-compose.yml` - Service definitions
-6. `docs/architecture.md` - Deep technical details
-
----
-
-**Status:** ✅ Phase 1 Complete - Ready for Phase 2
-
-**Next up:** Restaurant management REST API (Phase 2)
+- `backend/app/db/models.py` — all 12 models
+- `backend/app/api/deps.py` — tenant isolation enforcement
+- `backend/app/rag/vector_db.py` — ChromaDB integration
+- `backend/app/services/knowledge_service.py` — RAG ingestion/retrieval
+- `docker-compose.yml` — full local stack
+- `docs/architecture.md` — system design and decision log

@@ -199,6 +199,12 @@ class RestaurantKnowledgeDocument(TenantModel):
     # Relationships
     restaurant = relationship("Restaurant", back_populates="knowledge_docs")
 
+    @property
+    def chunk_count(self) -> int:
+        """Number of vector chunks indexed for this document. Not a
+        persisted column — derived from vector_ids for API responses."""
+        return len(self.vector_ids or [])
+
     __table_args__ = (
         Index("idx_doc_restaurant_type", "restaurant_id", "document_type"),
     )

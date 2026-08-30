@@ -128,8 +128,11 @@ cp .env.example .env
 # Start all services (Docker Compose handles dependencies)
 docker compose up -d
 
-# Wait for services to be ready (~2 minutes for model downloads)
-docker compose logs -f
+# Wait ~30-60s for services to come up, then pull the models Ollama
+# needs (it starts with none installed — this is a one-time step per
+# ollama_data volume, ~5.3GB total):
+docker compose exec ollama ollama pull qwen3:8b
+docker compose exec ollama ollama pull nomic-embed-text
 
 # Access the application
 # - Dashboard: http://localhost

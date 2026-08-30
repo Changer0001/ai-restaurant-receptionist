@@ -85,13 +85,29 @@ docker compose up -d
 # Watch startup progress
 docker compose logs -f
 
-# Wait for services to be ready (~2-5 minutes for model downloads)
+# Wait for services to be ready (~30-60s)
 # Look for:
 # - "api | Application startup complete"
-# - "ollama | Ready"
 ```
 
-### 6. Verify Services
+### 6. Pull Required Models
+
+The Ollama container starts with no models installed — this is a
+required one-time step (models persist in the `ollama_data` volume
+afterward, so this only needs to run again if that volume is removed):
+
+```bash
+# LLM used for conversation (~5GB download)
+docker compose exec ollama ollama pull qwen3:8b
+
+# Embedding model used for RAG/knowledge-base search (~275MB download)
+docker compose exec ollama ollama pull nomic-embed-text
+
+# Verify both are present
+docker compose exec ollama ollama list
+```
+
+### 7. Verify Services
 
 ```bash
 # Check all services
@@ -104,7 +120,7 @@ curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
-### 7. Access Services
+### 8. Access Services
 
 | Service | URL | Default Login |
 |---------|-----|---|
@@ -215,12 +231,19 @@ docker run --rm --gpus all nvidia/cuda:12.0-runtime nvidia-smi
 
 ### Ollama Model Not Downloading
 
+The Ollama container itself starts immediately, but it ships with **no
+models** — the LLM and embedding models used by this project must be
+pulled manually the first time (see "Pull Required Models" in Quick
+Start above). This is a one-time step per Ollama data volume.
+
 ```bash
 # Check Ollama logs
 docker compose logs ollama
 
-# Manually pull model
-docker compose exec ollama ollama pull qwen:latest
+# Manually pull the models this project uses (matches OLLAMA_MODEL and
+# EMBEDDING_MODEL in .env — adjust if you changed either)
+docker compose exec ollama ollama pull qwen3:8b
+docker compose exec ollama ollama pull nomic-embed-text
 
 # List available models
 docker compose exec ollama ollama list

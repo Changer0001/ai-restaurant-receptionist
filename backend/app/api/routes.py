@@ -6,7 +6,7 @@ Main router that includes all API endpoints.
 
 from fastapi import APIRouter
 
-from app.api.endpoints import auth, faqs, hours, restaurants
+from app.api.endpoints import auth, faqs, hours, knowledge, restaurants
 
 router = APIRouter()
 
@@ -14,6 +14,7 @@ router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(restaurants.router, prefix="/restaurants", tags=["Restaurants"])
 router.include_router(hours.router, prefix="/restaurants", tags=["Restaurant Hours"])
 router.include_router(faqs.router, prefix="/restaurants", tags=["Restaurant FAQs"])
+router.include_router(knowledge.router, prefix="/restaurants", tags=["Restaurant Knowledge Base"])
 
 # Added in later phases:
 # router.include_router(calls.router, prefix="/calls", tags=["Calls"])

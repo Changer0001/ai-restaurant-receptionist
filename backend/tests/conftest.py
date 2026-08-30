@@ -7,8 +7,12 @@ never against the real Postgres configured in .env. The FastAPI
 `get_db_session` dependency is overridden accordingly.
 """
 
+import uuid
+
+import chromadb
 import pytest
 import pytest_asyncio
+from chromadb.config import Settings as ChromaSettings
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -17,6 +21,9 @@ from app.db import models  # noqa: F401 - registers all models on Base.metadata
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
+from app.providers.embedding import get_embedding_provider
+from app.rag.vector_db import VectorDB, get_vector_db
+from tests.fakes import FakeEmbeddingProvider
 
 
 @pytest_asyncio.fixture
@@ -38,7 +45,27 @@ async def session_maker(db_engine):
 
 
 @pytest.fixture
-def client(session_maker):
+def vector_db():
+    """A fresh, isolated in-memory ChromaDB instance per test — never the
+    real chromadb Docker service configured in .env.
+
+    Each test gets its own uniquely-named collection: chromadb's
+    EphemeralClient caches its backing store keyed by client settings, so
+    separate EphemeralClient() instances in the same process (i.e. two
+    tests in the same pytest run) silently share data under the same
+    default collection name unless given distinct names.
+    """
+    chroma_client = chromadb.EphemeralClient(settings=ChromaSettings(anonymized_telemetry=False))
+    return VectorDB(chroma_client, collection_name=f"test_{uuid.uuid4().hex}")
+
+
+@pytest.fixture
+def embedding_provider():
+    return FakeEmbeddingProvider()
+
+
+@pytest.fixture
+def client(session_maker, vector_db, embedding_provider):
     async def _override_get_db_session():
         async with session_maker() as session:
             try:
@@ -51,6 +78,8 @@ def client(session_maker):
                 await session.close()
 
     app.dependency_overrides[get_db_session] = _override_get_db_session
+    app.dependency_overrides[get_vector_db] = lambda: vector_db
+    app.dependency_overrides[get_embedding_provider] = lambda: embedding_provider
     # Not using `with TestClient(app) as c:` on purpose — entering that
     # context triggers app.main's lifespan, which tries to create tables
     # against the *real* DATABASE_URL. That's caught and merely logged
