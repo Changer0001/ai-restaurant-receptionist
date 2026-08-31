@@ -15,6 +15,30 @@ from app.providers.llm.base import LLMProvider
 logger = logging.getLogger(__name__)
 
 
+def _build_options(temperature: float, max_tokens: Optional[int]) -> Dict[str, float | int]:
+    """
+    Build Ollama's `options` object.
+
+    Ollama's /api/generate and /api/chat only read runtime parameters
+    like temperature and num_predict from a nested "options" object —
+    NOT as top-level request keys (that was the bug here: temperature
+    and num_predict were previously sent top-level, so Ollama silently
+    ignored them and always sampled at its own model-default temperature,
+    regardless of what a caller asked for). That's mostly harmless for
+    free-form generation, but callers like reservation field extraction
+    and intent classification pass temperature=0.0 specifically because
+    they parse strict JSON out of the response — sampling at Ollama's
+    default (~0.8) instead made small models flake on the "respond with
+    ONLY a JSON object" instruction, which extract_json_object() then
+    can't parse, so the field never gets filled and the caller gets
+    asked the same question every turn.
+    """
+    options: Dict[str, float | int] = {"temperature": temperature}
+    if max_tokens is not None:
+        options["num_predict"] = max_tokens
+    return options
+
+
 class OllamaLLMProvider(LLMProvider):
     """
     Ollama-based LLM provider for local inference.
@@ -47,8 +71,7 @@ class OllamaLLMProvider(LLMProvider):
                 json={
                     "model": self.model,
                     "prompt": prompt,
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
+                    "options": _build_options(temperature, max_tokens),
                     "stream": False,
                 },
             )
@@ -75,8 +98,7 @@ class OllamaLLMProvider(LLMProvider):
                 json={
                     "model": self.model,
                     "messages": messages,
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
+                    "options": _build_options(temperature, max_tokens),
                     "stream": False,
                 },
             )
