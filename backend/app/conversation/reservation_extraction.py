@@ -11,7 +11,6 @@ must not corrupt the draft or reach the database.
 """
 
 import json
-import logging
 import re
 from dataclasses import asdict
 from datetime import datetime
@@ -21,8 +20,6 @@ from app.conversation.state import ReservationDraft
 from app.conversation.text_utils import extract_json_object, strip_thinking
 from app.prompts import render_prompt
 from app.providers.llm.base import LLMProvider
-
-logger = logging.getLogger(__name__)
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _MAX_PARTY_SIZE = 30  # beyond this, it's a private event, not a phone reservation
@@ -55,13 +52,6 @@ async def extract_reservation_fields(
     raw = await llm.generate(prompt, temperature=0.0)
     parsed = extract_json_object(strip_thinking(raw))
 
-    # TEMPORARY debug logging — remove once reservation-extraction
-    # reliability is confirmed against real calls.
-    logger.warning(
-        f"DEBUG extract_reservation_fields: message={latest_message!r} "
-        f"raw_llm_output={raw!r} parsed_json={parsed!r}"
-    )
-
     if parsed is None:
         return draft
 
@@ -79,10 +69,7 @@ async def extract_reservation_fields(
         if value is not None:
             merged[field] = value
 
-    result = ReservationDraft(**merged)
-    # TEMPORARY — see above.
-    logger.warning(f"DEBUG extract_reservation_fields: validated_updates={updates!r} merged_draft={result!r}")
-    return result
+    return ReservationDraft(**merged)
 
 
 def _validate_name(value: object) -> Optional[str]:
