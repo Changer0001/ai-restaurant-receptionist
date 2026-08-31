@@ -3,6 +3,10 @@
 .env.local
 .env.*.local
 
+# Local dev-script state (see scripts/full-restart.sh) — a phone
+# number cached per-machine, not project config.
+.twilio-test-number
+
 # Python
 # Scoped to backend/ (not left bare) — an unscoped `lib/`, `build/`,
 # etc. would also match same-named source directories elsewhere in
