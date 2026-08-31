@@ -142,9 +142,19 @@ curl http://localhost:8000/health
 docker compose exec postgres psql -U restaurantai -d restaurantai
 
 # Then run SQL:
+#
+# created_at/updated_at are included explicitly on every insert below.
+# Every table inherits TimestampMixin (see backend/app/db/base.py), whose
+# NOT NULL created_at/updated_at columns default via SQLAlchemy's own
+# `default=func.now()` — a Python/ORM-level default the application
+# fills in on every insert it makes. That default is never written into
+# the database itself (no `server_default`), so it does NOT apply to a
+# raw SQL statement run directly in psql, bypassing the ORM entirely —
+# omitting these columns here fails with "null value in column
+# created_at violates not-null constraint".
 INSERT INTO restaurants (
   id, name, address, city, timezone, 
-  transfer_number, is_active
+  transfer_number, is_active, created_at, updated_at
 ) VALUES (
   'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   'Example Italian Restaurant',
@@ -152,37 +162,41 @@ INSERT INTO restaurants (
   'New York',
   'America/New_York',
   '+12125551234',
-  true
+  true,
+  now(),
+  now()
 );
 
 INSERT INTO restaurant_phone_numbers (
-  id, restaurant_id, phone_number, is_active
+  id, restaurant_id, phone_number, is_active, created_at, updated_at
 ) VALUES (
   'a47ac10b-58cc-4372-a567-0e02b2c3d480',
   'f47ac10b-58cc-4372-a567-0e02b2c3d479',
   '+12125559876',  -- Your Twilio number
-  true
+  true,
+  now(),
+  now()
 );
 
 INSERT INTO restaurant_hours (
   id, restaurant_id, day_of_week, 
-  opening_time, closing_time, is_closed
+  opening_time, closing_time, is_closed, created_at, updated_at
 ) VALUES
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d481', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 0, '11:00', '22:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d482', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 1, '11:00', '22:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d483', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 2, '11:00', '22:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d484', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 3, '11:00', '22:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d485', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 4, '11:00', '22:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d486', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 5, '12:00', '23:00', false),
-  ('b47ac10b-58cc-4372-a567-0e02b2c3d487', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 6, '12:00', '23:00', false);
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d481', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 0, '11:00', '22:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d482', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 1, '11:00', '22:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d483', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 2, '11:00', '22:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d484', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 3, '11:00', '22:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d485', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 4, '11:00', '22:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d486', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 5, '12:00', '23:00', false, now(), now()),
+  ('b47ac10b-58cc-4372-a567-0e02b2c3d487', 'f47ac10b-58cc-4372-a567-0e02b2c3d479', 6, '12:00', '23:00', false, now(), now());
 
 INSERT INTO restaurant_faqs (
-  id, restaurant_id, question, answer, category, is_active
+  id, restaurant_id, question, answer, category, is_active, created_at, updated_at
 ) VALUES
   ('c47ac10b-58cc-4372-a567-0e02b2c3d488', 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-   'Do you have outdoor seating?', 'Yes, we have a patio with seating for 20 people.', 'seating', true),
+   'Do you have outdoor seating?', 'Yes, we have a patio with seating for 20 people.', 'seating', true, now(), now()),
   ('c47ac10b-58cc-4372-a567-0e02b2c3d489', 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-   'What are your hours?', 'We are open Monday to Friday 11am to 10pm, and Saturday to Sunday 12pm to 11pm.', 'hours', true);
+   'What are your hours?', 'We are open Monday to Friday 11am to 10pm, and Saturday to Sunday 12pm to 11pm.', 'hours', true, now(), now());
 ```
 
 ## Twilio Configuration
