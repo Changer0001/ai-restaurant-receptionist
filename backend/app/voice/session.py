@@ -48,6 +48,18 @@ _WHISPER_SAMPLE_RATE = 16000
 # start listening a beat before the caller has actually heard us finish.
 _PLAYBACK_TAIL_BUFFER_S = 0.2
 
+# Spoken immediately after transcribing the caller's utterance, before
+# the (potentially slow — CPU-only local inference can take 10-30+
+# seconds per turn across escalation-check/intent/extraction/generation
+# calls) conversation engine runs. Without this, the caller hears
+# total silence for that whole window, which reads exactly like a
+# dropped call — observed live to cause the caller (or their carrier's
+# own silence detection) to hang up before the real answer is ready.
+# Deliberately not added to context.history or the DB transcript (see
+# _process_utterance) — it's a UX filler, not part of the actual
+# conversational exchange the engine or a human reviewer should see.
+_PROCESSING_FILLER = "One moment, let me check on that for you."
+
 SendAudio = Callable[[bytes], Awaitable[None]]
 
 
@@ -128,6 +140,8 @@ class CallSession:
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 
         await call_service.append_transcript_turn(self.db, self.call, "caller", text, confidence)
+
+        await self._speak(_PROCESSING_FILLER)
 
         result = await self.engine.handle_turn(self.context, text, call_sid=self.call.call_sid)
 
