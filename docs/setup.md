@@ -370,7 +370,10 @@ curl -s http://localhost:11434/api/tags | grep -q "qwen" && echo "✓ Ollama OK"
 
 # 4. Check ChromaDB
 echo "Testing ChromaDB..."
-curl -s http://localhost:8011/api/version && echo "✓ ChromaDB OK" || echo "✗ ChromaDB FAILED"
+# -f makes curl itself fail (nonzero exit) on a 4xx/5xx response —
+# without it, this always printed "OK" even against a 404 body, since
+# curl doesn't treat an HTTP error status as failure by default.
+curl -sf http://localhost:8011/api/v1/version && echo "✓ ChromaDB OK" || echo "✗ ChromaDB FAILED"
 
 # 5. Check Redis
 echo "Testing Redis..."

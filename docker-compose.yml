@@ -73,7 +73,13 @@ services:
     volumes:
       - chromadb_data:/chroma/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/version"]
+      # /api/version (no version prefix) is not a real route on 0.5.7 —
+      # confirmed by inspecting its own chromadb/server/fastapi/__init__.py,
+      # which only registers /api/v1/version and /api/v1/heartbeat. The
+      # bare path 404s even though the server itself is healthy, which
+      # left this container permanently reporting "unhealthy" — hit live
+      # running this exact compose file.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/version"]
       interval: 10s
       timeout: 5s
       retries: 5
