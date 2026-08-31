@@ -1,9 +1,13 @@
 """Intent Classification"""
 
+import logging
+
 from app.conversation.state import ConversationContext
 from app.conversation.text_utils import strip_thinking
 from app.prompts import render_prompt
 from app.providers.llm.base import LLMProvider
+
+logger = logging.getLogger(__name__)
 
 VALID_INTENTS = frozenset({"FAQ", "RESERVATION", "ORDER", "HUMAN", "UNCLEAR"})
 
@@ -28,6 +32,10 @@ async def classify_intent(
     )
     raw = await llm.generate(prompt, temperature=0.0)
     cleaned = strip_thinking(raw)
+
+    # TEMPORARY debug logging — remove once intent-classification
+    # accuracy is confirmed against real calls.
+    logger.warning(f"DEBUG classify_intent: message={latest_message!r} raw_llm_output={raw!r}")
 
     if not cleaned:
         return "UNCLEAR"

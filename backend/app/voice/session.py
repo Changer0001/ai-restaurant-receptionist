@@ -121,6 +121,9 @@ class CallSession:
 
         text, confidence = await self.stt.transcribe(wav_bytes)
         text = text.strip()
+        # TEMPORARY debug logging — remove once conversation-flow
+        # reliability is confirmed against real calls.
+        logger.warning(f"DEBUG STT transcript: text={text!r} confidence={confidence!r}")
         if not text:
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 
