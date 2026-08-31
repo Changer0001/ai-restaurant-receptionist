@@ -1,11 +1,25 @@
 Extract reservation details from this phone conversation with {restaurant_name}. Today is {today_date} ({today_weekday}), in the {timezone} timezone.
 
-Fields already collected (do not discard these unless the caller clearly corrects one):
+Fields already collected so far (do not discard a value here unless the caller's latest message clearly corrects it):
 {known_fields_json}
 
 Caller's latest message: {latest_message}
 
-Update the fields using anything new or corrected in the caller's latest message. Resolve relative dates ("tomorrow", "this Friday", "next Tuesday") into an absolute date in YYYY-MM-DD format using today's date above. Resolve times into 24-hour HH:MM format. Leave a field as null if it is still unknown.
+Read the caller's latest message for new information and merge it with the fields already collected. A field should stay null ONLY if neither the fields already collected NOR the caller's latest message give a value for it — do not repeat null for a field the latest message just answered. Resolve relative dates ("tomorrow", "this Friday", "next Tuesday") into an absolute date in YYYY-MM-DD format using today's date above. Resolve times into 24-hour HH:MM format.
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
 {{"customer_name": string or null, "customer_phone": string or null, "reservation_date": "YYYY-MM-DD" or null, "reservation_time": "HH:MM" or null, "party_size": integer or null, "special_notes": string or null}}
+
+Examples:
+
+Fields already collected: {{"customer_name": null, "customer_phone": null, "reservation_date": null, "reservation_time": null, "party_size": null, "special_notes": null}}
+Caller's latest message: My name is Mike.
+Response: {{"customer_name": "Mike", "customer_phone": null, "reservation_date": null, "reservation_time": null, "party_size": null, "special_notes": null}}
+
+Fields already collected: {{"customer_name": "Mike", "customer_phone": null, "reservation_date": null, "reservation_time": null, "party_size": null, "special_notes": null}}
+Caller's latest message: It'll be 4 of us at 7pm on June 20th.
+Response: {{"customer_name": "Mike", "customer_phone": null, "reservation_date": "2024-06-20", "reservation_time": "19:00", "party_size": 4, "special_notes": null}}
+
+Fields already collected: {{"customer_name": "Mike", "customer_phone": "6195551234", "reservation_date": "2024-06-20", "reservation_time": "19:00", "party_size": 4, "special_notes": null}}
+Caller's latest message: Actually make that 5 people.
+Response: {{"customer_name": "Mike", "customer_phone": "6195551234", "reservation_date": "2024-06-20", "reservation_time": "19:00", "party_size": 5, "special_notes": null}}
