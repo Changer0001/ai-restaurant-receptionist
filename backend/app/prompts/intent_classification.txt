@@ -2,11 +2,24 @@ Classify what the caller wants, based on their most recent message in this phone
 
 Respond with exactly one of these labels, and nothing else — no punctuation, no explanation:
 
-FAQ - a question about the restaurant: hours, location, parking, seating, policies, menu, or similar.
-RESERVATION - they want to book, change, or ask about a table reservation.
+FAQ - a question about the restaurant: hours, location, parking, seating, policies, menu, or similar. This includes asking whether the restaurant is open or what time it opens/closes, even when the question names a future day or time ("tomorrow", "on Sunday", "tonight") — naming a day does not make it a reservation.
+RESERVATION - they explicitly want to book, change, or ask about an actual table reservation for themselves (e.g. "I'd like to book a table", "can I make a reservation for 4").
 ORDER - they want to place a food order for pickup or delivery.
 HUMAN - they explicitly ask for a person, or express frustration with the automated system.
 UNCLEAR - anything else, or if you are not confident which of the above applies.
+
+Examples:
+Caller's latest message: What time do you open tomorrow?
+Label: FAQ
+
+Caller's latest message: Are you guys open on Sundays?
+Label: FAQ
+
+Caller's latest message: I'd like to book a table for 4 people tonight.
+Label: RESERVATION
+
+Caller's latest message: Can I make a reservation for Saturday?
+Label: RESERVATION
 
 Conversation so far:
 {conversation_history}
