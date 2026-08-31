@@ -62,13 +62,37 @@ class Settings(BaseSettings):
     # ========================================================================
     # LANGUAGE MODEL (LLM)
     # ========================================================================
+    # "ollama" (fully local, needs a GPU for acceptable phone-call
+    # latency — see docs/roadmap.md) or "groq" (hosted; free tier
+    # available, and fast enough on CPU hardware that a caller doesn't
+    # hear long dead-air gaps between turns). This is the dial a
+    # deployment turns to offer a client either a fully local/private
+    # stack or a hosted one — the conversation engine only depends on
+    # the LLMProvider interface, never a specific provider.
+    LLM_PROVIDER: str = "ollama"
+
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen3:8b"
     OLLAMA_REQUEST_TIMEOUT: int = 60
 
+    # Groq's OpenAI-compatible chat completions API. Free tier as of
+    # this writing; llama-3.3-70b-versatile is a much stronger
+    # instruction-follower than a local 3B model can be on CPU (this
+    # project's own prompts needed few-shot examples to work around
+    # exactly that gap — see app/prompts/), and Groq's inference is
+    # fast enough that it doesn't reintroduce the CPU-latency problem
+    # local Ollama had. llama-3.1-8b-instant is a faster/cheaper
+    # alternative if 70b's latency or free-tier limits become an issue.
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_REQUEST_TIMEOUT: int = 30
+
     # Separate embedding model — embedding models are purpose-built and
     # much smaller than chat models; using OLLAMA_MODEL for both would
     # waste VRAM and give worse embeddings than a dedicated model.
+    # Always served by Ollama regardless of LLM_PROVIDER — Groq's API
+    # doesn't serve embeddings, and RAG/knowledge-base search never
+    # needed the speed fix LLM_PROVIDER=groq exists for.
     EMBEDDING_MODEL: str = "nomic-embed-text"
 
     # ========================================================================
