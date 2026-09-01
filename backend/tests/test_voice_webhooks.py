@@ -218,7 +218,11 @@ async def test_transfer_webhook_dials_when_call_was_transferred(client, db_sessi
     resp = _signed_post(client, "/webhooks/twilio/transfer/CA_transfer_1", {})
 
     assert resp.status_code == 200
-    assert f"<Dial>{restaurant.transfer_number}</Dial>" in resp.text
+    assert f">{restaurant.transfer_number}</Dial>" in resp.text
+    # Dialed as the restaurant, not as the customer — otherwise a caller
+    # whose own line is the transfer target gets asked for a voicemail
+    # password instead of being connected.
+    assert f'callerId="{restaurant.phone_number}"' in resp.text
 
 
 async def test_transfer_webhook_hangs_up_when_call_was_not_transferred(

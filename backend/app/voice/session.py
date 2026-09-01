@@ -67,6 +67,19 @@ _PROCESSING_FILLER = "One moment, let me check on that for you."
 SendAudio = Callable[[bytes], Awaitable[None]]
 
 
+def _has_speech(text: str) -> bool:
+    """
+    Whether a transcript contains anything a caller actually said.
+
+    Whisper transcribes silence and line noise as bare punctuation —
+    a real call produced ".  .  .  ." from a pause, which then ran the
+    whole intent/escalation pipeline and had the AI offer to transfer
+    the caller because it "couldn't understand" a sound they never made.
+    An empty string isn't the only shape "nothing was said" takes.
+    """
+    return any(char.isalnum() for char in text)
+
+
 class CallSession:
     def __init__(
         self,
@@ -140,7 +153,7 @@ class CallSession:
         # TEMPORARY debug logging — remove once it's confirmed FAQ
         # questions (menu/parking/location) aren't being misrouted.
         logger.warning(f"DEBUG STT transcript: text={text!r} confidence={confidence!r}")
-        if not text:
+        if not _has_speech(text):
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 
         await call_service.append_transcript_turn(self.db, self.call, "caller", text, confidence)

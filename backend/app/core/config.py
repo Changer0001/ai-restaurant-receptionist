@@ -105,6 +105,34 @@ class Settings(BaseSettings):
     # ========================================================================
     WHISPER_MODEL: str = "large-v3"
     WHISPER_DEVICE: str = "cuda"
+    # Empty means "pick by device": float16 on CUDA, int8 on CPU.
+    # int8 is what makes a bigger model usable on a CPU-only machine —
+    # roughly 3-4x faster than float32 for a negligible accuracy cost,
+    # so "small with int8" beats "base with float32" on both counts.
+    # Don't run `base` on a phone line if you can avoid it: 8kHz
+    # telephone audio is already the hardest case for Whisper, and on
+    # real calls `base` produced "hollow options" for "halal options"
+    # and "chicken show, Emma" for "chicken shawarma".
+    WHISPER_COMPUTE_TYPE: str = ""
+
+    # Vocabulary hint passed to Whisper as its decoder prefix. Whisper
+    # biases toward spellings it has just "seen", so listing the words a
+    # caller to THIS restaurant is likely to say — dish names, the
+    # restaurant's own name — measurably improves them, at no runtime
+    # cost. This is the single highest-value setting for a menu full of
+    # words that aren't in everyday English, and it helps most for the
+    # accented speech those words usually arrive in.
+    #
+    # Keep it to a plausible sentence or a comma-separated list of terms;
+    # Whisper treats it as preceding context, not as a command. Override
+    # per deployment in .env with the restaurant's own menu vocabulary.
+    STT_INITIAL_PROMPT: str = (
+        "Thanks for calling. We serve halal Syrian and Mediterranean food: "
+        "shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, "
+        "kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, "
+        "manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, "
+        "gluten free, takeout, delivery, catering, reservation, parking."
+    )
 
     # ========================================================================
     # TEXT-TO-SPEECH

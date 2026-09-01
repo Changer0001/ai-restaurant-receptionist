@@ -37,12 +37,38 @@ def build_media_stream_twiml(call_id: str) -> str:
     return str(response)
 
 
-def build_transfer_or_hangup_twiml(transfer_number: str | None) -> str:
-    """TwiML for after the media stream ends: dial the restaurant's
-    transfer number if one was requested and configured, else hang up."""
+def build_transfer_or_hangup_twiml(
+    transfer_number: str | None, caller_id: str | None = None
+) -> str:
+    """
+    TwiML for after the media stream ends: dial the restaurant's
+    transfer number if one was requested and configured, else hang up.
+
+    caller_id should be the restaurant's own number. Without it, Twilio
+    puts the *caller's* number on the outbound leg, which is wrong in two
+    ways: whoever picks up sees the customer's number rather than the
+    restaurant's, and — hit live during testing — if the caller and the
+    transfer target are the same phone (someone calling their own
+    restaurant line to test it), the carrier sees a call from your number
+    to your number, routes it to your mailbox, and asks the *customer*
+    for the voicemail password. Dialing as the restaurant avoids that
+    whole class of self-call weirdness.
+    """
     response = VoiceResponse()
     if transfer_number:
-        response.dial(transfer_number)
+        response.dial(
+            transfer_number,
+            # Falls back to Twilio's default (the inbound caller's
+            # number) when the restaurant has no number on file.
+            caller_id=caller_id or None,
+            # Twilio's default is 30s of ringing with the customer
+            # hearing nothing. 20 gets them back to a hangup sooner when
+            # nobody picks up.
+            timeout=20,
+            # The customer hears real ringing instead of dead air while
+            # the restaurant's phone rings.
+            answer_on_bridge=True,
+        )
     else:
         response.hangup()
     return str(response)

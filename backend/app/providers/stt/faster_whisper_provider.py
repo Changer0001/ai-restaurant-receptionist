@@ -30,6 +30,8 @@ class FasterWhisperSTTProvider(STTProvider):
         self,
         model_size: str = settings.WHISPER_MODEL,
         device: str = settings.WHISPER_DEVICE,
+        compute_type: str = settings.WHISPER_COMPUTE_TYPE,
+        initial_prompt: str = settings.STT_INITIAL_PROMPT,
     ):
         """
         Initialize Faster-Whisper provider.
@@ -37,9 +39,15 @@ class FasterWhisperSTTProvider(STTProvider):
         Args:
             model_size: Model size (tiny, base, small, medium, large, large-v3)
             device: Compute device (cuda, cpu)
+            compute_type: Quantization (float16, int8, float32). Empty
+                picks by device — see WHISPER_COMPUTE_TYPE in config.
+            initial_prompt: Vocabulary hint biasing the decoder toward
+                this restaurant's dish names — see STT_INITIAL_PROMPT.
         """
         self.model_size = model_size
         self.device = device
+        self.compute_type = compute_type
+        self.initial_prompt = initial_prompt
         self.model: WhisperModel | None = None
 
     async def _load_model(self) -> WhisperModel:
@@ -51,11 +59,14 @@ class FasterWhisperSTTProvider(STTProvider):
         calling this method guarantees self.model is now set.
         """
         if self.model is None:
-            logger.info(f"Loading Whisper model: {self.model_size} on {self.device}")
+            compute_type = self.compute_type or ("float16" if self.device == "cuda" else "int8")
+            logger.info(
+                f"Loading Whisper model: {self.model_size} on {self.device} ({compute_type})"
+            )
             self.model = WhisperModel(
                 self.model_size,
                 device=self.device,
-                compute_type="float16" if self.device == "cuda" else "float32",
+                compute_type=compute_type,
             )
         return self.model
 
@@ -77,7 +88,26 @@ class FasterWhisperSTTProvider(STTProvider):
             segments, _info = model.transcribe(
                 audio_file,
                 language="en",
-                condition_on_previous_text=True,
+                # Biases the decoder toward this restaurant's vocabulary.
+                # Telephone audio is 8kHz and callers say dish names that
+                # aren't everyday English, which is exactly the case
+                # Whisper gets wrong without a hint: real calls produced
+                # "hollow options" for "halal options" and "chicken show,
+                # Emma" for "chicken shawarma".
+                initial_prompt=self.initial_prompt or None,
+                # False, despite the name sounding helpful: each caller
+                # utterance is transcribed as its own independent audio
+                # buffer, so there is no genuine prior context to carry —
+                # what this actually does here is let a mistake in one
+                # segment condition the next one, which is how Whisper
+                # gets into repetition loops on short, noisy phone audio.
+                condition_on_previous_text=False,
+                # Drops non-speech audio before decoding. Without it,
+                # silence and line noise get "transcribed" as filler —
+                # a real call produced ".  .  .  ." from a pause, which
+                # then went through the whole intent/escalation pipeline
+                # as if the caller had said something.
+                vad_filter=True,
             )
 
             text_parts = []

@@ -188,12 +188,17 @@ async def transfer_webhook(
 
     call = await call_service.get_call_by_sid(db, call_sid)
     transfer_number = None
+    caller_id = None
     if call is not None and call.was_transferred:
         restaurant = await restaurant_service.get_restaurant_or_404(db, call.restaurant_id)
         transfer_number = restaurant.transfer_number
+        # Dial as the restaurant, not as the customer — see
+        # build_transfer_or_hangup_twiml for why this matters.
+        caller_id = restaurant.phone_number
 
     return Response(
-        content=build_transfer_or_hangup_twiml(transfer_number), media_type=_XML_MEDIA_TYPE
+        content=build_transfer_or_hangup_twiml(transfer_number, caller_id),
+        media_type=_XML_MEDIA_TYPE,
     )
 
 

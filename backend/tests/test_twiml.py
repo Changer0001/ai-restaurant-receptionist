@@ -30,14 +30,32 @@ def test_media_stream_twiml_redirects_to_transfer_endpoint():
 
 def test_transfer_twiml_dials_when_number_given():
     xml = build_transfer_or_hangup_twiml("+15551234567")
-    assert "<Dial>+15551234567</Dial>" in xml
+    assert ">+15551234567</Dial>" in xml
     assert "<Hangup" not in xml
+
+
+def test_transfer_twiml_dials_as_the_restaurant_not_the_customer():
+    """
+    Without an explicit callerId, Twilio puts the *customer's* number on
+    the outbound leg. Besides showing the wrong number to whoever picks
+    up, that makes a call from a phone to itself when the caller and the
+    transfer target are the same line (someone testing their own
+    restaurant number) — the carrier sends it to voicemail and prompts
+    the customer for a mailbox password. Hit live.
+    """
+    xml = build_transfer_or_hangup_twiml("+15551234567", caller_id="+15559876543")
+    assert 'callerId="+15559876543"' in xml
+
+
+def test_transfer_twiml_omits_caller_id_when_the_restaurant_has_no_number():
+    xml = build_transfer_or_hangup_twiml("+15551234567", caller_id=None)
+    assert "callerId" not in xml
 
 
 def test_transfer_twiml_hangs_up_when_no_number():
     xml = build_transfer_or_hangup_twiml(None)
     assert "<Hangup" in xml
-    assert "<Dial>" not in xml
+    assert "<Dial" not in xml
 
 
 def test_rejection_twiml_says_message_and_hangs_up():

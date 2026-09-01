@@ -117,6 +117,28 @@ async def test_empty_transcription_is_ignored(
     assert session.context.history == []  # no turn recorded either
 
 
+async def test_punctuation_only_transcription_is_ignored(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    Whisper renders silence and line noise as bare punctuation, not as an
+    empty string. A real call produced ".  .  .  ." from a pause, which
+    ran the full intent and escalation pipeline and had the assistant
+    offer to transfer the caller over a sound they never made.
+    """
+    llm = ScriptedLLMProvider([], default="FAQ")
+    stt = ScriptedSTTProvider([(".  .  .  .", 0.3)])
+    session, sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    assert len(sender.sent) == 0
+    assert session.context.history == []
+
+
 async def test_faq_utterance_updates_outcome_and_speaks_response(
     db_session, restaurant, vector_db, embedding_provider
 ):
