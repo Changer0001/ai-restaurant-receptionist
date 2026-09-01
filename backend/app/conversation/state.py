@@ -108,6 +108,16 @@ class ConversationContext:
     caller_name: Optional[str] = None
     known_reservation: Optional[str] = None
 
+    def last_assistant_text(self) -> Optional[str]:
+        """
+        The last thing the assistant said, so a line about to be spoken
+        can avoid being word-for-word what the caller just heard (see
+        app/conversation/phrasing.py).
+        """
+        return next(
+            (turn.content for turn in reversed(self.history) if turn.role == "assistant"), None
+        )
+
     def add_turn(self, role: str, content: str) -> None:
         self.history.append(Turn(role=role, content=content))
 

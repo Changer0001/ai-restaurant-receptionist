@@ -40,6 +40,7 @@ from app.providers.stt.base import STTProvider
 from app.providers.tts.base import TTSProvider
 from app.rag.vector_db import VectorDB
 from app.services import call_service, caller_service
+from app.voice.speech_text import to_spoken
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,10 @@ class CallSession:
         # utterance while the assistant is still talking.
         playback_ends_at = time.monotonic()
 
-        for sentence in _split_into_speakable_chunks(text):
+        # Rewrite into spoken form first — before splitting, since this
+        # removes the decimal points in prices that would otherwise look
+        # like sentence boundaries.
+        for sentence in _split_into_speakable_chunks(to_spoken(text)):
             pcm_bytes, native_rate = await self.tts.synthesize(sentence)
             if not pcm_bytes:
                 continue

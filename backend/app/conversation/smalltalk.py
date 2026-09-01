@@ -18,7 +18,9 @@ more about what you need?", and "What was your name?" was classified as
 a request for a human and transferred the caller to the restaurant.
 """
 
-import random
+from typing import Optional
+
+from app.conversation.phrasing import pick
 
 _THANKS_WORDS = ("thank", "thanks", "appreciate")
 _GOODBYE_WORDS = ("bye", "goodbye", "good night", "have a good", "take care")
@@ -36,8 +38,9 @@ _IDENTITY_PHRASES = (
     "are you an ai",
 )
 
-# Several phrasings each, chosen at random: a receptionist who answers
-# every "thanks" with the identical sentence is the tell that gives an
+# Several phrasings each, and never the same one twice running (see
+# app/conversation/phrasing.py): a receptionist who answers every
+# "thanks" with the identical sentence is the tell that gives an
 # automated line away fastest, and it costs nothing to vary.
 _THANKS_REPLIES = (
     "You're very welcome. Anything else I can help you with?",
@@ -74,7 +77,7 @@ _OUT_OF_SCOPE_REPLIES = (
 )
 
 
-def out_of_scope_reply() -> str:
+def out_of_scope_reply(avoid: Optional[str] = None) -> str:
     """
     For a question a restaurant's phone line simply can't answer — the
     weather, the traffic, general knowledge.
@@ -85,7 +88,7 @@ def out_of_scope_reply() -> str:
     documents to answer from. Saying plainly that it's not something we
     can help with is both more honest and far more human than either.
     """
-    return random.choice(_OUT_OF_SCOPE_REPLIES)
+    return pick(_OUT_OF_SCOPE_REPLIES, avoid)
 
 
 def identity_answer(restaurant_name: str) -> str:
@@ -107,7 +110,12 @@ def is_farewell(message: str) -> bool:
     )
 
 
-def reply_to(message: str, restaurant_name: str) -> str:
+def reply_to(
+    message: str,
+    restaurant_name: str,
+    avoid: Optional[str] = None,
+    caller_name: Optional[str] = None,
+) -> str:
     """A natural reply to an acknowledgement, thanks, farewell or identity question."""
     lowered = message.lower()
 
@@ -117,9 +125,12 @@ def reply_to(message: str, restaurant_name: str) -> str:
         return f"{identity_answer(restaurant_name)} What can I help you with?"
 
     if is_farewell(message):
-        return random.choice(_GOODBYE_REPLIES)
+        goodbye = pick(_GOODBYE_REPLIES, avoid)
+        # Using a regular's name as they hang up is the kind of small
+        # thing that makes a place feel like it knows you.
+        return f"Thanks {caller_name}, have a great day!" if caller_name else goodbye
 
     if any(word in lowered for word in _THANKS_WORDS):
-        return random.choice(_THANKS_REPLIES)
+        return pick(_THANKS_REPLIES, avoid)
 
-    return random.choice(_ACKNOWLEDGEMENT_REPLIES)
+    return pick(_ACKNOWLEDGEMENT_REPLIES, avoid)

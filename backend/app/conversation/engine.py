@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.conversation import hours_answer, smalltalk
 from app.conversation.escalation import should_escalate
 from app.conversation.intent import classify_intent
+from app.conversation.phrasing import pick
 from app.conversation.rag_answer import build_retrieval_query, generate_faq_answer
 from app.conversation.reservation_extraction import extract_reservation_fields
 from app.conversation.state import ConversationContext, ConversationState, ReservationDraft
@@ -55,6 +56,17 @@ _RESERVATION_FIELD_PROMPTS = {
     "reservation_time": "What time works for you?",
     "party_size": "How many people will be in your party?",
 }
+
+# Asked when the caller's intent isn't clear. Several phrasings because
+# this is the line most likely to be heard twice in a row, and hearing
+# the identical sentence back is what makes a line feel automated. They
+# also avoid "I'm sorry" as an opener — apologizing for not
+# understanding, every time, wears on a caller quickly.
+_UNCLEAR_PROMPTS = (
+    "Sorry, I didn't quite catch that — what can I help you with?",
+    "I want to make sure I get this right. What were you after?",
+    "Could you say a bit more about what you need?",
+)
 
 _CONFIRM_WORDS = (
     "yes",
@@ -207,11 +219,13 @@ class ConversationEngine:
             # simply doesn't know the weather. Offering to transfer the
             # caller to a team member for it would waste everyone's time.
             context.unclear_count = 0
-            return self._say(context, smalltalk.out_of_scope_reply())
+            return self._say(
+                context, smalltalk.out_of_scope_reply(context.last_assistant_text())
+            )
 
         if intent == "SMALLTALK":
             context.unclear_count = 0
-            return self._say(context, smalltalk.reply_to(message, self.restaurant.name))
+            return self._say(context, self._smalltalk_reply(context, message))
 
         if intent == "HUMAN":
             # Belt and braces over the classifier: "what's your name?"
@@ -221,7 +235,7 @@ class ConversationEngine:
             # else, so it never transfers, whatever the label says.
             if smalltalk.is_identity_question(message):
                 context.unclear_count = 0
-                return self._say(context, smalltalk.reply_to(message, self.restaurant.name))
+                return self._say(context, self._smalltalk_reply(context, message))
             return self._transfer(context, "caller_requested_human")
 
         if intent == "ORDER":
@@ -239,7 +253,15 @@ class ConversationEngine:
         context.unclear_count += 1
         if context.unclear_count >= _MAX_UNCLEAR_BEFORE_ESCALATION:
             return self._offer_transfer(context, "repeated_unclear")
-        return self._say(context, "I'm sorry, could you tell me a bit more about what you need?")
+        return self._say(context, pick(_UNCLEAR_PROMPTS, context.last_assistant_text()))
+
+    def _smalltalk_reply(self, context: ConversationContext, message: str) -> str:
+        return smalltalk.reply_to(
+            message,
+            self.restaurant.name,
+            avoid=context.last_assistant_text(),
+            caller_name=context.caller_name,
+        )
 
     async def _handle_reservation_intent(
         self, context: ConversationContext, message: str

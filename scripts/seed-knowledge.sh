@@ -48,9 +48,15 @@
 # the caller's favor to complain about later.
 #
 # Where only an aggregator price was available (falafel, foul, the
-# salads), no price is stated at all and the document tells the assistant
-# to offer to have the team confirm it — better a short "the team can
-# tell you exactly" than a confidently wrong number.
+# salads), no price is stated at all — better the assistant says it
+# doesn't have that one than quote a confidently wrong number.
+#
+# Documents contain FACTS ONLY, never instructions to the assistant.
+# Anything written here can be retrieved and read aloud verbatim: an
+# earlier version ended a document with "say the team can give them the
+# exact price", and that line came back as a retrieved chunk on a live
+# call, one step away from being spoken to a caller. Guidance about how
+# to answer belongs in backend/app/prompts/, not in the knowledge base.
 #
 # STILL VERIFY WITH THE RESTAURANT before real callers hear any of this:
 # a published menu can be months out of date, and the owner is the only
@@ -190,8 +196,6 @@ Fried kibbeh stuffed with spiced ground beef and walnuts is 14.99.
 Shawarma fries, topped with beef or chicken shawarma with tahini and garlic paste, are 14.99.
 
 These are our prices for dining in and for pickup. Ordering through a delivery app costs more, because the apps set their own higher prices.
-
-For the price of anything not listed here, say the kitchen team can give them the exact price.
 EOF
 
 cat > "$TMP_DIR/menu_appetizers.txt" << 'EOF'
@@ -206,8 +210,6 @@ Our salads include fattoush: tomato, cucumber, red onion, lettuce and parsley wi
 We also do baba ghanoush, baked eggplant mashed with tahina, yogurt, lemon and garlic; and foul, slow-boiled fava beans with tomato, parsley, lemon, garlic and olive oil.
 
 Manakeesh, our fresh-baked flatbread with zaatar and olive oil, is 8.99, and it's a morning item — we serve it in the mornings only.
-
-For the price of any starter or salad not listed here, say the team can give them the exact price.
 EOF
 
 cat > "$TMP_DIR/ordering_and_catering.txt" << 'EOF'
