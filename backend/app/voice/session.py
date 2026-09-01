@@ -148,7 +148,15 @@ class CallSession:
         pcm_16k = resample_linear(pcm_8k, _TWILIO_SAMPLE_RATE, _WHISPER_SAMPLE_RATE)
         wav_bytes = pcm16_to_wav_bytes(pcm_16k, _WHISPER_SAMPLE_RATE)
 
+        # Per-stage timing. The caller hears silence for the whole of
+        # this method, and "the AI is slow" is unactionable until you
+        # know which stage owns the seconds — the answer is rarely the
+        # one people assume (moving the LLM to a hosted API doesn't help
+        # if STT and TTS are the local CPU work that dominates).
+        stage_started = time.perf_counter()
+
         text, confidence = await self.stt.transcribe(wav_bytes)
+        stt_seconds = time.perf_counter() - stage_started
         text = text.strip()
         # TEMPORARY debug logging — remove once it's confirmed FAQ
         # questions (menu/parking/location) aren't being misrouted.
@@ -161,14 +169,28 @@ class CallSession:
         if settings.SPEAK_PROCESSING_FILLER:
             await self._speak(_PROCESSING_FILLER)
 
+        engine_started = time.perf_counter()
         result = await self.engine.handle_turn(self.context, text, call_sid=self.call.call_sid)
+        engine_seconds = time.perf_counter() - engine_started
 
         await call_service.append_transcript_turn(
             self.db, self.call, "assistant", result.response_text
         )
         self._update_outcome(result)
 
+        speak_started = time.perf_counter()
         await self._speak(result.response_text)
+        tts_seconds = time.perf_counter() - speak_started
+
+        logger.info(
+            "Turn timing: stt=%.2fs engine=%.2fs tts=%.2fs total=%.2fs "
+            "(caller waited total + ~%dms of end-of-speech detection)",
+            stt_seconds,
+            engine_seconds,
+            tts_seconds,
+            time.perf_counter() - stage_started,
+            self.turn_detector.config.silence_hangover_ms,
+        )
 
         if result.should_transfer:
             self.should_close = True

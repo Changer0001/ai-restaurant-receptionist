@@ -307,11 +307,17 @@ async def test_explicit_human_request_transfers(db_session, vector_db, embedding
     assert result.transfer_reason == "caller_requested_human"
 
 
-async def test_sentiment_based_escalation_short_circuits_intent_classification(db_session, vector_db, embedding_provider, restaurant):
+async def test_sentiment_based_escalation_wins_over_the_classified_intent(db_session, vector_db, embedding_provider, restaurant):
+    """
+    Escalation and intent classification are issued together to save a
+    network round trip per turn, so intent IS classified even for an
+    escalating message — its result just has to lose. An upset caller
+    whose words also parse as a normal FAQ must still be offered a human.
+    """
     llm = ScriptedLLMProvider(
         [
             (contains("decide if it needs to be handed off"), "YES"),
-            (contains("Respond with exactly one of these labels"), "SHOULD NOT BE CALLED"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
         ]
     )
     engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
@@ -324,7 +330,6 @@ async def test_sentiment_based_escalation_short_circuits_intent_classification(d
     assert result.should_transfer is False
     assert context.state == ConversationState.CONFIRM_TRANSFER
     assert context.transfer_reason == "escalation"
-    assert not any("Respond with exactly one of these labels" in call for call in llm.calls)
 
     result2 = await engine.handle_turn(context, "Yes, connect me")
     assert result2.should_transfer is True
