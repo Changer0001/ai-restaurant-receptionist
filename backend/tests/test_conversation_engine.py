@@ -86,8 +86,8 @@ async def test_faq_grounded_in_knowledge_base(db_session, vector_db, embedding_p
 
 
 async def test_ungrounded_faq_never_reaches_the_llm_for_an_answer(db_session, vector_db, embedding_provider, restaurant):
-    """An empty knowledge base must produce the fallback answer without
-    ever calling the LLM to generate a (potentially hallucinated) one."""
+    """An empty knowledge base must offer a human handoff without ever
+    calling the LLM to generate a (potentially hallucinated) answer."""
     llm = ScriptedLLMProvider(
         [
             (contains("decide if it needs to be handed off"), "NO"),
@@ -100,8 +100,32 @@ async def test_ungrounded_faq_never_reaches_the_llm_for_an_answer(db_session, ve
 
     result = await engine.handle_turn(context, "Do you validate parking?")
 
-    assert "don't have that information" in result.response_text
     assert not any("using ONLY the information below" in call for call in llm.calls)
+    # The offer must actually park the call in CONFIRM_TRANSFER: saying
+    # "I can connect you" and then dropping back to intent classification
+    # leaves the caller's "yes please" landing as a brand-new request,
+    # so the promised connection never happens — hit live.
+    assert result.state == ConversationState.CONFIRM_TRANSFER
+    assert "connect you" in result.response_text
+
+
+async def test_confirming_an_ungrounded_faq_offer_transfers_the_call(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "Do you validate parking?")
+    result = await engine.handle_turn(context, "Yes please")
+
+    assert result.should_transfer is True
+    assert result.state == ConversationState.TRANSFER_TO_HUMAN
 
 
 # ----------------------------------------------------------------------
@@ -336,6 +360,24 @@ async def test_repeated_unclear_intent_offers_a_transfer(db_session, vector_db, 
 
 
 async def test_unclear_count_resets_after_successful_intent(db_session, vector_db, embedding_provider, restaurant):
+    # The middle turn has to be a *grounded* FAQ answer to leave the
+    # conversation in IDENTIFY_INTENT: an ungrounded one now offers a
+    # transfer and parks in CONFIRM_TRANSFER, where the third turn would
+    # be read as an answer to that offer rather than a new request.
+    # Phrased FAQ-style for the fake embedder's literal word overlap —
+    # see test_faq_grounded_in_knowledge_base.
+    await knowledge_service.create_document(
+        db_session,
+        vector_db,
+        embedding_provider,
+        restaurant.id,
+        "Holiday hours",
+        "Are you open on Christmas? We're closed on Christmas.",
+        "policy",
+        None,
+    )
+    await db_session.commit()
+
     responses = iter(["UNCLEAR", "FAQ", "UNCLEAR"])
     llm = ScriptedLLMProvider(
         [

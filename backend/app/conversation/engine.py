@@ -66,6 +66,7 @@ _OFFER_TRANSFER_PROMPTS = {
     "reservation_request": "I'd like to make sure your reservation is taken care of properly — would you like me to connect you with someone at the restaurant who can help with that?",
     "escalation": "I want to make sure you get the help you need — would you like me to connect you with a team member?",
     "repeated_unclear": "I'm having a hard time understanding — would you like me to connect you with a team member instead?",
+    "unknown_answer": "I don't have that one in front of me, I'm afraid. Would you like me to connect you with someone at the restaurant who can tell you?",
 }
 
 
@@ -167,15 +168,29 @@ class ConversationEngine:
     async def _handle_faq(self, context: ConversationContext, message: str) -> TurnResult:
         if hours_answer.looks_like_hours_question(message):
             hours = await hours_service.get_hours(self.db, self.restaurant.id)
-            if hours_answer.looks_like_closing_time_question(message):
-                answer = hours_answer.answer_closing_time_tonight(hours, self._now())
+            now = self._now()
+            # Most specific question first: a caller who asked about one
+            # day wants an answer about that day, not the whole week.
+            if hours_answer.looks_like_tomorrow_question(message):
+                answer = hours_answer.answer_hours_tomorrow(hours, now)
+            elif hours_answer.looks_like_open_now_question(message):
+                answer = hours_answer.answer_open_now(hours, now)
+            elif hours_answer.looks_like_closing_time_question(message):
+                answer = hours_answer.answer_closing_time_tonight(hours, now)
             else:
                 answer = hours_answer.format_hours_summary(hours)
             return self._say(context, answer)
 
-        answer, _grounded = await generate_faq_answer(
+        answer, grounded = await generate_faq_answer(
             self.llm, self.embedder, self.vector_db, self.restaurant.id, self.restaurant.name, message
         )
+        # An ungrounded answer offers to connect the caller with someone —
+        # so actually make that offer, rather than saying the words and
+        # dropping back to intent classification, where the caller's "yes,
+        # please" lands as a brand-new request and goes nowhere. Hit live:
+        # two turns in a row promising a connection that never came.
+        if not grounded:
+            return self._offer_transfer(context, "unknown_answer")
         return self._say(context, answer)
 
     # ------------------------------------------------------------------
