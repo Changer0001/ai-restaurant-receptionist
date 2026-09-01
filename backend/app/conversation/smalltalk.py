@@ -58,6 +58,38 @@ _GOODBYE_REPLIES = (
     "Have a great day, thanks for calling!",
 )
 
+# Answering "how are you?" is the most basic courtesy there is, and
+# skipping it is glaring. These answer the question and hand the call
+# back — a caller who opens with a pleasantry still has a reason for
+# ringing.
+_GREETING_REPLIES = (
+    "I'm doing well, thanks for asking! What can I get for you?",
+    "Doing great, thank you! How can I help?",
+    "All good here, thanks! What can I do for you?",
+)
+
+# Used instead of the "anything else?" lines before anything has
+# actually been answered. There is no "else" yet.
+_OPENING_REPLIES = (
+    "Of course. What can I help you with?",
+    "Sure. What can I get for you?",
+    "Happy to help. What did you need?",
+)
+
+_GREETING_STARTS = ("hi", "hello", "hey", "good morning", "good afternoon", "good evening")
+_HOW_ARE_YOU_PHRASES = (
+    "how are you",
+    "how're you",
+    "how are things",
+    "how's it going",
+    "hows it going",
+    "how you doing",
+)
+
+# A "done" phrase only closes a call when it's most of what was said —
+# see is_farewell.
+_SHORT_CLOSING_WORDS = 6
+
 
 def is_identity_question(message: str) -> bool:
     """
@@ -103,11 +135,28 @@ def identity_answer(restaurant_name: str) -> str:
 
 
 def is_farewell(message: str) -> bool:
-    """Whether the caller is wrapping the call up, not just acknowledging."""
+    """
+    Whether the caller is wrapping the call up, not just acknowledging.
+
+    A "done" phrase only ends a call when it's most of what was said.
+    "That's all we're going to do next week" contains "that's all" but is
+    plainly not a goodbye — a real call hit exactly that and got sent off
+    with "thanks for calling, have a good one!" mid-conversation.
+    """
     lowered = message.lower()
-    return any(word in lowered for word in _GOODBYE_WORDS) or any(
+    if any(word in lowered for word in _GOODBYE_WORDS):
+        return True
+    return len(lowered.split()) <= _SHORT_CLOSING_WORDS and any(
         phrase in lowered for phrase in _DONE_PHRASES
     )
+
+
+def is_greeting(message: str) -> bool:
+    """"Hi", "good morning", "how are you doing today?" — an opening, not a request."""
+    lowered = message.lower().strip(" .!?")
+    if any(lowered.startswith(word) for word in _GREETING_STARTS):
+        return True
+    return any(phrase in lowered for phrase in _HOW_ARE_YOU_PHRASES)
 
 
 def reply_to(
@@ -115,8 +164,19 @@ def reply_to(
     restaurant_name: str,
     avoid: Optional[str] = None,
     caller_name: Optional[str] = None,
+    already_helped: bool = False,
 ) -> str:
-    """A natural reply to an acknowledgement, thanks, farewell or identity question."""
+    """
+    A natural reply to a greeting, acknowledgement, thanks, farewell or
+    identity question.
+
+    already_helped says whether anything has actually been answered yet
+    on this call. It decides between "anything else?" and "what can I
+    help you with?" — offering "anything else" before doing anything at
+    all is nonsense, and it's what a caller heard when they opened with
+    "hello, how are you doing today?" and got "Sure thing. Anything else
+    I can help with?"
+    """
     lowered = message.lower()
 
     if is_identity_question(message):
@@ -130,7 +190,13 @@ def reply_to(
         # thing that makes a place feel like it knows you.
         return f"Thanks {caller_name}, have a great day!" if caller_name else goodbye
 
+    # Before thanks: "hi, thanks for picking up" is a greeting, and
+    # someone asking how your day is going deserves an answer, not a
+    # "you're welcome".
+    if is_greeting(message):
+        return pick(_GREETING_REPLIES, avoid)
+
     if any(word in lowered for word in _THANKS_WORDS):
         return pick(_THANKS_REPLIES, avoid)
 
-    return pick(_ACKNOWLEDGEMENT_REPLIES, avoid)
+    return pick(_ACKNOWLEDGEMENT_REPLIES if already_helped else _OPENING_REPLIES, avoid)

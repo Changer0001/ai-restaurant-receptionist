@@ -94,6 +94,12 @@ class ConversationContext:
     transfer_reason: Optional[str] = None
     unclear_count: int = 0
 
+    # Whether anything has actually been answered on this call yet.
+    # "Anything else I can help with?" is nonsense before the first real
+    # answer, and a caller who opened with "hello, how are you doing
+    # today?" heard exactly that as the reply.
+    answered_something: bool = False
+
     # What the restaurant already knows about this caller, looked up from
     # past calls and reservations by the number they're calling from (see
     # app/services/caller_service.py). Both stay None for an unrecognized

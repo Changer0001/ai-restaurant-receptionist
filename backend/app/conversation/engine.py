@@ -266,6 +266,7 @@ class ConversationEngine:
             self.restaurant.name,
             avoid=context.last_assistant_text(),
             caller_name=context.caller_name,
+            already_helped=context.answered_something,
         )
 
     async def _handle_reservation_intent(
@@ -277,6 +278,7 @@ class ConversationEngine:
         # name, phone number, party size — for a table they had booked
         # minutes earlier on the same call.
         if context.known_reservation and _asks_about_existing_reservation(message):
+            context.answered_something = True
             return self._say(context, context.known_reservation)
 
         if not settings.FEATURE_RESERVATION_COLLECTION:
@@ -329,6 +331,7 @@ class ConversationEngine:
                 answer = hours_answer.answer_closing_time_tonight(hours, now)
             else:
                 answer = hours_answer.format_hours_summary(hours)
+            context.answered_something = True
             return self._say(context, answer)
 
         answer, grounded = await generate_faq_answer(
@@ -354,6 +357,7 @@ class ConversationEngine:
         # two turns in a row promising a connection that never came.
         if not grounded:
             return self._offer_transfer(context, "unknown_answer")
+        context.answered_something = True
         return self._say(context, answer)
 
     # ------------------------------------------------------------------
