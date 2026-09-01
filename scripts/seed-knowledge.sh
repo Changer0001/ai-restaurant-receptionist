@@ -64,7 +64,10 @@ API_BASE="${API_BASE:-http://localhost:8010/api}"
 read -rp "Dashboard email: " EMAIL
 read -rsp "Dashboard password: " PASSWORD
 echo
-read -rp "Restaurant ID (from the dashboard URL): " RESTAURANT_ID
+# Looked up automatically below when left blank — most accounts have
+# exactly one restaurant, and going to find the ID first was enough
+# friction to have this step skipped repeatedly.
+read -rp "Restaurant ID (press Enter to detect it automatically): " RESTAURANT_ID
 
 echo "==> Logging in..."
 LOGIN_RESPONSE="$(curl -sS -X POST "$API_BASE/auth/login" \
@@ -79,6 +82,36 @@ if [ -z "$ACCESS_TOKEN" ]; then
   exit 1
 fi
 echo "    Logged in."
+
+# --- Resolve the restaurant ID --------------------------------------------
+if [ -z "$RESTAURANT_ID" ]; then
+  echo "==> Looking up your restaurant..."
+  RESTAURANTS="$(curl -sS -H "Authorization: Bearer $ACCESS_TOKEN" "$API_BASE/restaurants")"
+  # Only auto-select when there's exactly one: picking the first of
+  # several on a platform-admin account would silently seed the wrong
+  # restaurant's knowledge base.
+  RESTAURANT_ID="$(python3 -c "
+import json, sys
+try:
+    items = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if len(items) == 1:
+    print(items[0]['id'])
+else:
+    for r in items:
+        print(f\"    {r['id']}  {r.get('name', '')}\", file=sys.stderr)
+" <<< "$RESTAURANTS" || true)"
+
+  if [ -z "$RESTAURANT_ID" ]; then
+    echo "ERROR: Could not pick a restaurant automatically." >&2
+    echo "Re-run and paste one of the IDs listed above (if none are listed, the" >&2
+    echo "login worked but the account has no restaurant yet). Raw response:" >&2
+    echo "$RESTAURANTS" >&2
+    exit 1
+  fi
+  echo "    Using restaurant: $RESTAURANT_ID"
+fi
 
 # --- Clear previously seeded documents ------------------------------------
 # Without this, every re-run stacks another near-identical copy of each
