@@ -23,7 +23,8 @@ class ConversationState(str, Enum):
     explicitly asking for a person) is also immediate, straight to
     TRANSFER_TO_HUMAN — asking "would you like a human?" when they just
     said exactly that would be a redundant, irritating extra turn.
-    Every other transfer trigger (ORDER, sentiment-based escalation,
+    Every other transfer trigger (ORDER; RESERVATION when
+    FEATURE_RESERVATION_COLLECTION is off; sentiment-based escalation;
     repeated UNCLEAR) instead parks in CONFIRM_TRANSFER first: the
     engine offers a handoff rather than silently forcing one, the way a
     human agent would ask "would you like me to get someone for you?"

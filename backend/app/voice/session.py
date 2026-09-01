@@ -154,14 +154,20 @@ class CallSession:
         if result.should_transfer:
             self.should_close = True
 
+    # Transfer reasons that are a routine handoff to what the restaurant
+    # itself handles (an order, a reservation with FEATURE_RESERVATION_COLLECTION
+    # off) — CALL_TRANSFERRED, not HUMAN_ESCALATION, which implies
+    # something went wrong (frustration, repeated misunderstanding).
+    _ROUTINE_TRANSFER_REASONS = frozenset({"order_request", "reservation_request"})
+
     def _update_outcome(self, result: TurnResult) -> None:
         if result.reservation is not None:
             self.final_outcome = CallOutcomeEnum.RESERVATION_CREATED
         elif result.should_transfer:
             self.final_outcome = (
-                CallOutcomeEnum.HUMAN_ESCALATION
-                if result.transfer_reason != "order_request"
-                else CallOutcomeEnum.CALL_TRANSFERRED
+                CallOutcomeEnum.CALL_TRANSFERRED
+                if result.transfer_reason in self._ROUTINE_TRANSFER_REASONS
+                else CallOutcomeEnum.HUMAN_ESCALATION
             )
         elif self.final_outcome == CallOutcomeEnum.UNKNOWN:
             self.final_outcome = CallOutcomeEnum.FAQ_ANSWERED

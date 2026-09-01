@@ -12,6 +12,7 @@ import json
 
 from app.conversation.engine import ConversationEngine
 from app.conversation.state import ConversationContext, ConversationState
+from app.core.config import settings
 from app.services import knowledge_service
 from tests.fakes import ScriptedLLMProvider, contains
 
@@ -106,6 +107,39 @@ async def test_ungrounded_faq_never_reaches_the_llm_for_an_answer(db_session, ve
 # ----------------------------------------------------------------------
 # Reservation flow (multi-turn)
 # ----------------------------------------------------------------------
+
+
+async def test_reservation_offers_a_transfer_when_collection_is_disabled(
+    db_session, vector_db, embedding_provider, restaurant, monkeypatch
+):
+    """
+    FEATURE_RESERVATION_COLLECTION=False is for a restaurant with no
+    reservation system of its own to write a collected reservation
+    into — a reservation request should offer a human handoff instead
+    of the AI trying to collect the details itself.
+    """
+    monkeypatch.setattr(settings, "FEATURE_RESERVATION_COLLECTION", False)
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    result = await engine.handle_turn(context, "I'd like a table for four this Friday at 7")
+
+    assert result.should_transfer is False
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "reservation_request"
+    assert not any("Extract reservation details" in call for call in llm.calls)
+
+    result2 = await engine.handle_turn(context, "Yes, please")
+    assert result2.should_transfer is True
+    assert result2.transfer_reason == "reservation_request"
+    assert context.state == ConversationState.TRANSFER_TO_HUMAN
 
 
 async def test_full_reservation_flow_creates_a_real_reservation(db_session, vector_db, embedding_provider, restaurant):

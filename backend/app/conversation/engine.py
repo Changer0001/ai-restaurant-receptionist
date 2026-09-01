@@ -34,6 +34,7 @@ from app.conversation.rag_answer import generate_faq_answer
 from app.conversation.reservation_extraction import extract_reservation_fields
 from app.conversation.state import ConversationContext, ConversationState, ReservationDraft
 from app.conversation.tools import create_reservation_request
+from app.core.config import settings
 from app.db.models import Reservation, Restaurant
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
@@ -62,6 +63,7 @@ _DENY_WORDS = ("no", "wrong", "change", "actually", "incorrect")
 # reason not listed here.
 _OFFER_TRANSFER_PROMPTS = {
     "order_request": "I'm not able to take orders directly — would you like me to connect you with someone who can help with that?",
+    "reservation_request": "I'd like to make sure your reservation is taken care of properly — would you like me to connect you with someone at the restaurant who can help with that?",
     "escalation": "I want to make sure you get the help you need — would you like me to connect you with a team member?",
     "repeated_unclear": "I'm having a hard time understanding — would you like me to connect you with a team member instead?",
 }
@@ -138,6 +140,14 @@ class ConversationEngine:
 
         if intent == "RESERVATION":
             context.unclear_count = 0
+            if not settings.FEATURE_RESERVATION_COLLECTION:
+                # Some restaurants have no booking system of their own to
+                # write a collected reservation into (e.g. paper-only) —
+                # offering a human handoff instead of the AI collecting
+                # details is the more honest MVP behavior there. A
+                # restaurant that DOES want the AI to collect and create
+                # a real pending Reservation row turns this back on.
+                return self._offer_transfer(context, "reservation_request")
             context.state = ConversationState.RESERVATION_COLLECTING
             context.reservation_draft = await extract_reservation_fields(
                 self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()

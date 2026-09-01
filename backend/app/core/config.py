@@ -240,6 +240,15 @@ class Settings(BaseSettings):
     # ========================================================================
     FEATURE_CALL_RECORDING: bool = True
     FEATURE_CALL_TRANSFER: bool = True
+    # True: the AI collects reservation details itself (name, phone,
+    # date, time, party size) and creates a real pending Reservation
+    # row — for a restaurant whose staff actually checks and confirms
+    # those. False: a reservation request instead just offers a human
+    # handoff (see app/conversation/engine.py's _handle_identify_intent)
+    # — the honest choice for a restaurant with no reservation system of
+    # its own to write a collected reservation into (paper-only booking,
+    # say), where an AI-created Reservation row would just be a database
+    # entry nobody ever looks at.
     FEATURE_RESERVATION_COLLECTION: bool = True
     FEATURE_SMS_NOTIFICATIONS: bool = True
     FEATURE_EMAIL_NOTIFICATIONS: bool = True
