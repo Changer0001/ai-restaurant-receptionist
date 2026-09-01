@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.conversation import hours_answer
+from app.conversation import hours_answer, smalltalk
 from app.conversation.escalation import should_escalate
 from app.conversation.intent import classify_intent
 from app.conversation.rag_answer import generate_faq_answer
@@ -146,7 +146,19 @@ class ConversationEngine:
         if escalate:
             return self._offer_transfer(context, "escalation")
 
+        if intent == "SMALLTALK":
+            context.unclear_count = 0
+            return self._say(context, smalltalk.reply_to(message, self.restaurant.name))
+
         if intent == "HUMAN":
+            # Belt and braces over the classifier: "what's your name?"
+            # came back HUMAN on a real call and transferred the caller
+            # out of a conversation they were perfectly happy in. Asking
+            # who picked up is never a request to be handed to someone
+            # else, so it never transfers, whatever the label says.
+            if smalltalk.is_identity_question(message):
+                context.unclear_count = 0
+                return self._say(context, smalltalk.reply_to(message, self.restaurant.name))
             return self._transfer(context, "caller_requested_human")
 
         if intent == "ORDER":

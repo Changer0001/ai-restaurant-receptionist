@@ -5,7 +5,8 @@ Respond with exactly one of these labels, and nothing else — no punctuation, n
 FAQ - a question about the restaurant: hours, location, parking, seating, policies, menu, or similar. This includes asking whether the restaurant is open or what time it opens/closes, even when the question names a future day or time ("tomorrow", "on Sunday", "tonight") — naming a day does not make it a reservation.
 RESERVATION - they explicitly want to book, change, or ask about an actual table reservation for themselves (e.g. "I'd like to book a table", "can I make a reservation for 4").
 ORDER - they want to place a food order for pickup or delivery.
-HUMAN - they explicitly ask for a person, or express frustration with the automated system.
+HUMAN - they explicitly ask to be put through to a person, or express frustration with the automated system. A question about who they are speaking to ("what's your name?", "are you a robot?") is NOT this: that asks about you, it does not ask to be transferred to somebody else.
+SMALLTALK - an acknowledgement, thanks, a greeting, a goodbye, or a question about who they're speaking to. There is nothing to look up: "okay", "alright", "got it", "thanks", "that's all", "bye", "what's your name?".
 UNCLEAR - anything else, or if you are not confident which of the above applies.
 
 Examples:
@@ -20,6 +21,18 @@ Label: RESERVATION
 
 Caller's latest message: Can I make a reservation for Saturday?
 Label: RESERVATION
+
+Caller's latest message: Okay.
+Label: SMALLTALK
+
+Caller's latest message: Thanks, that's all I needed.
+Label: SMALLTALK
+
+Caller's latest message: What was your name?
+Label: SMALLTALK
+
+Caller's latest message: Can you put me through to someone?
+Label: HUMAN
 
 Conversation so far:
 {conversation_history}

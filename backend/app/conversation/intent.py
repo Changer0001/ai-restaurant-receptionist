@@ -9,7 +9,7 @@ from app.providers.llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-VALID_INTENTS = frozenset({"FAQ", "RESERVATION", "ORDER", "HUMAN", "UNCLEAR"})
+VALID_INTENTS = frozenset({"FAQ", "RESERVATION", "ORDER", "HUMAN", "SMALLTALK", "UNCLEAR"})
 
 
 async def classify_intent(

@@ -20,6 +20,7 @@ see docs/roadmap.md.
 
 import base64
 import logging
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -65,6 +66,32 @@ _PLAYBACK_TAIL_BUFFER_S = 0.2
 _PROCESSING_FILLER = "One moment, let me check on that for you."
 
 SendAudio = Callable[[bytes], Awaitable[None]]
+
+
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+# Below this, a fragment isn't worth its own synthesis pass — the
+# per-call overhead and the audible seam cost more than the head start
+# it buys. "Yes." merges into the sentence after it.
+_MIN_CHUNK_CHARS = 25
+
+
+def _split_into_speakable_chunks(text: str) -> list[str]:
+    """
+    Split a reply into sentence-sized pieces for streaming synthesis.
+
+    Short leading fragments are merged forward so the first chunk is a
+    real phrase rather than a single word — the point is to start
+    speaking sooner, not to chop the delivery into pieces.
+    """
+    chunks: list[str] = []
+    for sentence in _SENTENCE_BOUNDARY.split(text.strip()):
+        if not sentence:
+            continue
+        if chunks and len(chunks[-1]) < _MIN_CHUNK_CHARS:
+            chunks[-1] = f"{chunks[-1]} {sentence}"
+        else:
+            chunks.append(sentence)
+    return chunks
 
 
 def _has_speech(text: str) -> bool:
@@ -214,20 +241,46 @@ class CallSession:
             self.final_outcome = CallOutcomeEnum.FAQ_ANSWERED
 
     async def _speak(self, text: str) -> None:
-        pcm_bytes, native_rate = await self.tts.synthesize(text)
-        if not pcm_bytes:
-            return
+        """
+        Synthesize and send speech one sentence at a time.
 
-        pcm_array = np.frombuffer(pcm_bytes, dtype=np.int16)
-        pcm_8k = resample_linear(pcm_array, native_rate, _TWILIO_SAMPLE_RATE)
-        mulaw_bytes = pcm16_to_mulaw(pcm_8k)
+        Kokoro on CPU takes roughly as long as the reply is long —
+        measured at 1.6s for "Okay" and 6.2s for a two-sentence answer.
+        Synthesizing the whole reply before sending any of it means the
+        caller hears nothing for that entire time, on top of STT and the
+        LLM. Sending each sentence as it finishes gets the first words
+        into their ear while the rest is still being generated, which
+        cuts the silence to roughly the first sentence's synthesis.
 
-        # μ-law is exactly 1 byte per sample at the target rate, so this
-        # is the actual playback duration, not an approximation of it.
-        duration_s = len(mulaw_bytes) / _TWILIO_SAMPLE_RATE
-        self._speaking_until = time.monotonic() + duration_s + _PLAYBACK_TAIL_BUFFER_S
+        The trade is prosody: each sentence is synthesized without
+        knowing the next, so the delivery is very slightly flatter
+        across a boundary than one continuous pass would be. On a phone
+        line that is far less noticeable than six seconds of dead air.
+        """
+        # Playback is back-to-back, so each chunk starts when the
+        # previous one ends — unless synthesis fell behind playback, in
+        # which case the next chunk starts when it actually arrives.
+        # Tracking this properly keeps _speaking_until honest, which is
+        # what stops the caller's own audio being processed as a new
+        # utterance while the assistant is still talking.
+        playback_ends_at = time.monotonic()
 
-        await self.send_audio(mulaw_bytes)
+        for sentence in _split_into_speakable_chunks(text):
+            pcm_bytes, native_rate = await self.tts.synthesize(sentence)
+            if not pcm_bytes:
+                continue
+
+            pcm_array = np.frombuffer(pcm_bytes, dtype=np.int16)
+            pcm_8k = resample_linear(pcm_array, native_rate, _TWILIO_SAMPLE_RATE)
+            mulaw_bytes = pcm16_to_mulaw(pcm_8k)
+
+            # μ-law is exactly 1 byte per sample at the target rate, so
+            # this is the actual playback duration, not an approximation.
+            duration_s = len(mulaw_bytes) / _TWILIO_SAMPLE_RATE
+            playback_ends_at = max(playback_ends_at, time.monotonic()) + duration_s
+            self._speaking_until = playback_ends_at + _PLAYBACK_TAIL_BUFFER_S
+
+            await self.send_audio(mulaw_bytes)
 
     async def end(self) -> None:
         """Called once the Media Stream disconnects — finalizes the Call record."""

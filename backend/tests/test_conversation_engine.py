@@ -307,6 +307,53 @@ async def test_explicit_human_request_transfers(db_session, vector_db, embedding
     assert result.transfer_reason == "caller_requested_human"
 
 
+async def test_asking_who_picked_up_never_transfers_the_caller(db_session, vector_db, embedding_provider, restaurant):
+    """
+    "What was your name?" came back from the classifier as HUMAN on a
+    real call and transferred the caller to the restaurant. Asking who
+    answered the phone is a question about the assistant, not a request
+    to be handed to somebody else — so it must not transfer even when
+    the classifier says HUMAN.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "HUMAN"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    result = await engine.handle_turn(context, "What was your name?")
+
+    assert result.should_transfer is False
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert restaurant.name in result.response_text
+
+
+async def test_acknowledgement_gets_a_natural_reply_not_a_request_to_repeat(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "SMALLTALK"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.unclear_count = 1
+
+    result = await engine.handle_turn(context, "Okay, thanks.")
+
+    assert "sorry" not in result.response_text.lower()
+    assert result.should_transfer is False
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    # Small talk is a successful turn, so it clears the run of unclear
+    # ones — otherwise politeness accumulates toward an escalation.
+    assert context.unclear_count == 0
+
+
 async def test_sentiment_based_escalation_wins_over_the_classified_intent(db_session, vector_db, embedding_provider, restaurant):
     """
     Escalation and intent classification are issued together to save a

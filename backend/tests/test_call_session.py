@@ -16,7 +16,7 @@ import numpy as np
 from app.conversation.state import ConversationState
 from app.db.models import CallOutcomeEnum
 from app.services import call_service
-from app.voice.session import CallSession
+from app.voice.session import CallSession, _split_into_speakable_chunks
 from tests.fakes import FakeTTSProvider, ScriptedLLMProvider, ScriptedSTTProvider, contains
 
 
@@ -25,7 +25,14 @@ def _fake_audio_frame():
 
 
 class _RecordingSender:
-    """Collects every audio chunk CallSession sends, for assertions."""
+    """
+    Collects every audio chunk CallSession sends, for assertions.
+
+    Note that chunks are NOT one-per-reply: replies are synthesized and
+    sent a sentence at a time so the caller starts hearing the answer
+    while the rest is still being generated (see _speak). Assert on
+    whether audio was sent, not on how many pieces it arrived in.
+    """
 
     def __init__(self):
         self.sent: list[bytes] = []
@@ -61,7 +68,7 @@ async def test_start_speaks_default_greeting(db_session, restaurant, vector_db, 
 
     await session.start()
 
-    assert len(sender.sent) == 1  # one audio chunk was sent
+    assert len(sender.sent) >= 1  # the greeting was spoken
     assert any(
         t.role == "assistant" and restaurant.name in t.content for t in session.context.history
     )
@@ -158,7 +165,7 @@ async def test_faq_utterance_updates_outcome_and_speaks_response(
     await session._process_utterance()
 
     assert session.final_outcome == CallOutcomeEnum.FAQ_ANSWERED
-    assert len(sender.sent) == 1
+    assert len(sender.sent) >= 1
     assert any(
         "close" in t.content.lower() for t in session.context.history if t.role == "assistant"
     )
@@ -204,7 +211,7 @@ async def test_full_reservation_flow_creates_reservation_and_sets_outcome(
 
     await session._process_utterance()
     assert session.final_outcome == CallOutcomeEnum.RESERVATION_CREATED
-    assert len(sender.sent) == 2
+    assert len(sender.sent) >= 2  # at least one chunk per spoken reply
 
     from sqlalchemy import select
 
@@ -278,3 +285,40 @@ async def test_end_preserves_a_resolved_outcome(
     await db_session.commit()
 
     assert session.call.outcome == CallOutcomeEnum.FAQ_ANSWERED
+
+
+# ----------------------------------------------------------------------
+# Streaming speech synthesis
+#
+# Kokoro on CPU costs roughly as long as the reply is long — measured at
+# 1.6s for "Okay" and 6.2s for a two-sentence answer. Synthesizing the
+# whole reply before sending any of it means the caller hears nothing
+# for that whole time, so replies are sent a sentence at a time.
+# ----------------------------------------------------------------------
+
+
+def test_speech_is_split_into_sentences_for_streaming():
+    chunks = _split_into_speakable_chunks(
+        "Yes, we're all halal. Everything on the menu is. Did you want to hear the specials?"
+    )
+    assert chunks == [
+        "Yes, we're all halal. Everything on the menu is.",
+        "Did you want to hear the specials?",
+    ]
+
+
+def test_short_leading_fragments_merge_forward():
+    """
+    The point is to start speaking sooner, not to chop delivery into
+    pieces — a bare "Yes." isn't worth its own synthesis pass and the
+    audible seam it costs.
+    """
+    assert _split_into_speakable_chunks("Yes. We're open until ten tonight.") == [
+        "Yes. We're open until ten tonight."
+    ]
+
+
+def test_single_sentence_is_one_chunk():
+    assert _split_into_speakable_chunks("We're at 388 East Main Street in El Cajon.") == [
+        "We're at 388 East Main Street in El Cajon."
+    ]
