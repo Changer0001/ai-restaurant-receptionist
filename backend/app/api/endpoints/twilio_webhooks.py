@@ -196,6 +196,26 @@ async def transfer_webhook(
         # build_transfer_or_hangup_twiml for why this matters.
         caller_id = restaurant.phone_number
 
+        # Both columns are nullable, and an unset one fails quietly in a
+        # way that looks like a bug in the conversation: with no
+        # transfer_number the caller is promised a person and then simply
+        # hung up on, and with no phone_number Twilio falls back to
+        # putting the *caller's* number on the outbound leg — which, when
+        # they're being transferred to their own line, lands them in
+        # their own voicemail being asked for a mailbox password. Say so
+        # in the log rather than leaving it to be diagnosed from a
+        # confusing call.
+        if not transfer_number:
+            logger.error(
+                f"Call {call_sid} asked to be transferred, but restaurant "
+                f"{restaurant.id} has no transfer_number set — hanging up on the caller instead."
+            )
+        elif not caller_id:
+            logger.warning(
+                f"Restaurant {restaurant.id} has no phone_number set, so the transfer of call "
+                f"{call_sid} will show the customer's own number as the caller ID."
+            )
+
     return Response(
         content=build_transfer_or_hangup_twiml(transfer_number, caller_id),
         media_type=_XML_MEDIA_TYPE,

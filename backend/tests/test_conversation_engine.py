@@ -190,18 +190,27 @@ async def test_full_reservation_flow_creates_a_real_reservation(db_session, vect
 
     r2 = await engine.handle_turn(context, "Jane Smith")
     assert context.state == ConversationState.RESERVATION_COLLECTING
-    assert "phone" in r2.response_text.lower()
+    assert "number" in r2.response_text.lower()
 
     r3 = await engine.handle_turn(context, "555-123-4567")
     assert context.state == ConversationState.RESERVATION_CONFIRMING
-    assert "confirm" in r3.response_text.lower() and "Jane Smith" in r3.response_text
+    # Reads the booking back and asks for the go-ahead before creating
+    # anything — the wording is deliberately a person's ("shall I put
+    # that in") rather than software's ("submit this request").
+    assert "Jane Smith" in r3.response_text
+    assert r3.response_text.rstrip().endswith("?")
 
     r4 = await engine.handle_turn(context, "Yes that's correct", call_sid="CA123")
     assert r4.reservation is not None
     assert r4.reservation.status.value == "pending"
     assert r4.reservation.customer_name == "Jane Smith"
     assert r4.reservation.call_sid == "CA123"
-    assert "submitted" in r4.response_text.lower()
+    # Must NOT promise a confirmed table: this is a request the
+    # restaurant still has to accept, and a caller who turns up
+    # believing they have a booking is the worst outcome here.
+    assert "confirm" in r4.response_text.lower()
+    assert "you're booked" not in r4.response_text.lower()
+    assert "reserved" not in r4.response_text.lower()
     assert "confirmed" not in r4.response_text.lower()  # never overclaim
     assert context.state == ConversationState.IDENTIFY_INTENT
     assert context.reservation_draft.customer_name is None  # draft reset for next request
@@ -599,3 +608,89 @@ async def test_out_of_scope_questions_are_declined_without_a_pointless_transfer(
     assert result.should_transfer is False
     assert context.state == ConversationState.IDENTIFY_INTENT
     assert "sorry, could you tell me" not in result.response_text.lower()
+
+
+async def test_a_caller_is_not_asked_for_the_number_they_are_calling_from(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    Asking someone to read out the number they're calling from is the
+    clearest "this isn't really listening" moment a phone line has. On a
+    real call it also cost a turn and came back from speech recognition
+    as "619-689." with the last four digits missing.
+    """
+    import json as _json
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (
+                contains("Extract reservation details"),
+                _json.dumps(
+                    {
+                        "customer_name": None,
+                        "customer_phone": None,
+                        "reservation_date": "2026-09-04",
+                        "reservation_time": "19:00",
+                        "party_size": 4,
+                        "special_notes": None,
+                    }
+                ),
+            ),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(
+        restaurant_id=restaurant.id,
+        caller_number="+15551234567",
+        caller_name="Mike",
+    )
+
+    result = await engine.handle_turn(context, "A table for four on Friday at 7")
+
+    # Name and number both already known, so the only thing left is the
+    # read-back — no questions asked for either.
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+    assert context.reservation_draft.customer_phone == "+15551234567"
+    assert context.reservation_draft.customer_name == "Mike"
+    # Taken from caller ID rather than spoken, so it's confirmed rather
+    # than silently assumed.
+    assert "number you're calling from" in result.response_text
+
+
+async def test_a_caller_booking_on_someone_elses_behalf_can_still_correct_the_details(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """Prefilled details are a default, not a decision — "no" reopens them."""
+    import json as _json
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (
+                contains("Extract reservation details"),
+                _json.dumps(
+                    {
+                        "customer_name": None,
+                        "customer_phone": None,
+                        "reservation_date": "2026-09-04",
+                        "reservation_time": "19:00",
+                        "party_size": 4,
+                        "special_notes": None,
+                    }
+                ),
+            ),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(
+        restaurant_id=restaurant.id, caller_number="+15551234567", caller_name="Mike"
+    )
+
+    await engine.handle_turn(context, "A table for four on Friday at 7")
+    result = await engine.handle_turn(context, "No, that's wrong")
+
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+    assert "change" in result.response_text.lower()

@@ -187,6 +187,12 @@ class CallSession:
         # in try/except deliberately: a caller-memory lookup failing
         # must never stop a call from being answered — the worst
         # acceptable outcome is a caller who isn't greeted by name.
+        # Not inside the try below: the number they're calling from comes
+        # from the phone system, not the database lookup, and it's what
+        # spares a caller being asked to read out a number we already
+        # have.
+        self.context.caller_number = self.call.caller_number
+
         try:
             self.caller_profile = await caller_service.get_caller_profile(
                 self.db, self.restaurant.id, self.call.caller_number

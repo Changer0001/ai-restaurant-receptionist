@@ -107,6 +107,9 @@ class ConversationContext:
     # mentioned.
     caller_name: Optional[str] = None
     known_reservation: Optional[str] = None
+    # The number they're calling from. Used to avoid asking a caller for
+    # a phone number the phone system already handed us.
+    caller_number: Optional[str] = None
 
     def last_assistant_text(self) -> Optional[str]:
         """

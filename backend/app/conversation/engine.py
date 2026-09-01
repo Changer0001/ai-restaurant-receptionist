@@ -50,11 +50,11 @@ from app.services import hours_service
 _MAX_UNCLEAR_BEFORE_ESCALATION = 2
 
 _RESERVATION_FIELD_PROMPTS = {
-    "customer_name": "Can I get a name for the reservation?",
-    "customer_phone": "What's the best phone number to reach you?",
-    "reservation_date": "What date would you like to come in?",
-    "reservation_time": "What time works for you?",
-    "party_size": "How many people will be in your party?",
+    "customer_name": "Can I take a name for the booking?",
+    "customer_phone": "What's the best number to reach you on?",
+    "reservation_date": "What day were you thinking?",
+    "reservation_time": "And what time suits you?",
+    "party_size": "How many of you will there be?",
 }
 
 # Asked when the caller's intent isn't clear. Several phrasings because
@@ -62,6 +62,11 @@ _RESERVATION_FIELD_PROMPTS = {
 # the identical sentence back is what makes a line feel automated. They
 # also avoid "I'm sorry" as an opener — apologizing for not
 # understanding, every time, wears on a caller quickly.
+# Said before the next question while taking a booking. A person
+# acknowledges what you just told them; asking the next question with
+# nothing in between is what filling in a form sounds like.
+_ACKNOWLEDGEMENTS = ("Got it.", "Perfect.", "Great, thank you.", "Lovely.")
+
 _UNCLEAR_PROMPTS = (
     "Sorry, I didn't quite catch that — what can I help you with?",
     "I want to make sure I get this right. What were you after?",
@@ -287,7 +292,28 @@ class ConversationEngine:
         context.reservation_draft = await extract_reservation_fields(
             self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
         )
+        self._prefill_known_caller_details(context)
         return self._advance_reservation_collection(context)
+
+    def _prefill_known_caller_details(self, context: ConversationContext) -> None:
+        """
+        Fill in what the phone system and past bookings already told us,
+        so the caller isn't asked for it.
+
+        Asking someone to read out the number they are calling from is
+        the clearest "this isn't really listening" moment a phone line
+        has — and on a real call it cost a turn and came back from
+        speech recognition as "619-689." with the last four digits
+        missing, needing another turn to correct. Both prefilled values
+        are read back for confirmation before anything is booked (see
+        _confirmation_text), so a caller booking for someone else, or on
+        someone else's phone, can still correct them.
+        """
+        draft = context.reservation_draft
+        if draft.customer_phone is None and context.caller_number:
+            draft.customer_phone = context.caller_number
+        if draft.customer_name is None and context.caller_name:
+            draft.customer_name = context.caller_name
 
     async def _handle_faq(self, context: ConversationContext, message: str) -> TurnResult:
         if hours_answer.looks_like_hours_question(message):
@@ -338,17 +364,25 @@ class ConversationEngine:
         context.reservation_draft = await extract_reservation_fields(
             self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
         )
-        return self._advance_reservation_collection(context)
+        return self._advance_reservation_collection(context, acknowledge=True)
 
-    def _advance_reservation_collection(self, context: ConversationContext) -> TurnResult:
+    def _advance_reservation_collection(
+        self, context: ConversationContext, acknowledge: bool = False
+    ) -> TurnResult:
         missing = context.reservation_draft.missing_fields()
         if missing:
-            return self._say(context, _RESERVATION_FIELD_PROMPTS[missing[0]])
+            question = _RESERVATION_FIELD_PROMPTS[missing[0]]
+            # A person says "got it" before the next question. Firing one
+            # question straight after another, with nothing in between,
+            # is what filling in a form sounds like.
+            if acknowledge:
+                question = f"{pick(_ACKNOWLEDGEMENTS, context.last_assistant_text())} {question}"
+            return self._say(context, question)
 
         context.state = ConversationState.RESERVATION_CONFIRMING
-        return self._say(context, self._confirmation_text(context.reservation_draft))
+        return self._say(context, self._confirmation_text(context.reservation_draft, context))
 
-    def _confirmation_text(self, draft: ReservationDraft) -> str:
+    def _confirmation_text(self, draft: ReservationDraft, context: ConversationContext) -> str:
         # Only called once _advance_reservation_collection() has confirmed
         # missing_fields() is empty, so these are guaranteed set.
         assert draft.reservation_date is not None
@@ -359,11 +393,19 @@ class ConversationEngine:
         hour_12 = hour % 12 or 12
         time_phrase = f"{hour_12} {period}" if minute == 0 else f"{hour_12}:{minute:02d} {period}"
 
-        return (
-            f"Just to confirm, that's a table for {draft.party_size} "
+        readback = (
+            f"Let me read that back: a table for {draft.party_size} "
             f"on {date_obj.strftime('%A, %B %-d')} at {time_phrase}, "
-            f"under {draft.customer_name}. Should I go ahead and submit this?"
+            f"under {draft.customer_name}."
         )
+
+        # A number taken from caller ID was never spoken aloud by the
+        # caller, so it gets confirmed here rather than silently assumed
+        # — they can correct it before anything is booked.
+        if draft.customer_phone and draft.customer_phone == context.caller_number:
+            readback += " I'll use the number you're calling from."
+
+        return f"{readback} Shall I put that in for you?"
 
     async def _handle_reservation_confirming(
         self, context: ConversationContext, message: str, call_sid: Optional[str]
@@ -374,9 +416,14 @@ class ConversationEngine:
             reservation = await create_reservation_request(self.db, self.restaurant, context.reservation_draft, call_sid)
             context.state = ConversationState.IDENTIFY_INTENT
             context.reservation_draft = ReservationDraft()
+            # Not "submitted" — that's software talking. But not
+            # "you're booked" either: this is a request the restaurant
+            # still has to confirm, and a caller who turns up thinking
+            # they have a table when they don't is the worst outcome
+            # this flow can produce.
             reply = (
-                "Great, your reservation request has been submitted. "
-                "The restaurant will confirm it with you shortly. Is there anything else I can help with?"
+                "Lovely, I've got that down. Someone will give you a quick call to confirm it. "
+                "Anything else I can help with?"
             )
             result = self._say(context, reply)
             result.reservation = reservation
@@ -386,7 +433,7 @@ class ConversationEngine:
             context.state = ConversationState.RESERVATION_COLLECTING
             return self._say(context, "No problem — what would you like to change?")
 
-        return self._say(context, "Sorry, should I go ahead and submit that reservation request?")
+        return self._say(context, "Sorry, shall I go ahead and put that booking in?")
 
     # ------------------------------------------------------------------
     # Shared helpers
