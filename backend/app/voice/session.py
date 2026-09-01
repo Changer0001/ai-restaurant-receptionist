@@ -19,6 +19,7 @@ see docs/roadmap.md.
 """
 
 import base64
+import logging
 import time
 from typing import Awaitable, Callable
 
@@ -38,6 +39,8 @@ from app.providers.stt.base import STTProvider
 from app.providers.tts.base import TTSProvider
 from app.rag.vector_db import VectorDB
 from app.services import call_service
+
+logger = logging.getLogger(__name__)
 
 _TWILIO_SAMPLE_RATE = 8000
 _WHISPER_SAMPLE_RATE = 16000
@@ -134,6 +137,9 @@ class CallSession:
 
         text, confidence = await self.stt.transcribe(wav_bytes)
         text = text.strip()
+        # TEMPORARY debug logging — remove once it's confirmed FAQ
+        # questions (menu/parking/location) aren't being misrouted.
+        logger.warning(f"DEBUG STT transcript: text={text!r} confidence={confidence!r}")
         if not text:
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 

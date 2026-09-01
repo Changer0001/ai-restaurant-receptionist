@@ -1,11 +1,15 @@
 """RAG-Grounded FAQ Answering"""
 
+import logging
+
 from app.conversation.text_utils import strip_thinking
 from app.prompts import render_prompt
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
 from app.rag.vector_db import VectorDB
 from app.services import knowledge_service
+
+logger = logging.getLogger(__name__)
 
 FALLBACK_ANSWER = "I don't have that information on hand, but I can connect you with someone who does."
 
@@ -28,6 +32,10 @@ async def generate_faq_answer(
     an answer from its own general knowledge.
     """
     chunks = await knowledge_service.search_knowledge(vector_db, embedder, restaurant_id, question)
+
+    # TEMPORARY debug logging — remove once it's confirmed FAQ questions
+    # (menu/parking/location) are finding grounded content.
+    logger.warning(f"DEBUG generate_faq_answer: question={question!r} chunks_found={len(chunks)}")
 
     if not chunks:
         return FALLBACK_ANSWER, False
