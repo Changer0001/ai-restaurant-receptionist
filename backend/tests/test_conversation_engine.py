@@ -176,7 +176,10 @@ async def test_reservation_denial_returns_to_collecting(db_session, vector_db, e
 # ----------------------------------------------------------------------
 
 
-async def test_order_request_transfers_without_taking_the_order(db_session, vector_db, embedding_provider, restaurant):
+async def test_order_request_offers_a_transfer_without_taking_the_order(db_session, vector_db, embedding_provider, restaurant):
+    """The engine asks before transferring (see ConversationState.CONFIRM_TRANSFER's
+    docstring) rather than forcing a handoff on its own judgment — it must not
+    silently transfer, and must not try to take the order itself."""
     llm = ScriptedLLMProvider(
         [
             (contains("decide if it needs to be handed off"), "NO"),
@@ -188,10 +191,46 @@ async def test_order_request_transfers_without_taking_the_order(db_session, vect
 
     result = await engine.handle_turn(context, "I want to order two burgers")
 
+    assert result.should_transfer is False
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "order_request"
+    assert "order" not in result.response_text.lower().replace("orders directly", "").replace("your order", "")
+
+
+async def test_confirmed_order_transfer_actually_transfers(db_session, vector_db, embedding_provider, restaurant):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "ORDER"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I want to order two burgers")
+    result = await engine.handle_turn(context, "Yes please")
+
     assert result.should_transfer is True
     assert result.transfer_reason == "order_request"
     assert context.state == ConversationState.TRANSFER_TO_HUMAN
-    assert "order" not in result.response_text.lower().replace("your order", "")  # doesn't ask what they'd like
+
+
+async def test_declined_transfer_returns_to_identify_intent(db_session, vector_db, embedding_provider, restaurant):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "ORDER"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I want to order two burgers")
+    result = await engine.handle_turn(context, "No, never mind")
+
+    assert result.should_transfer is False
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert context.transfer_reason is None
 
 
 async def test_explicit_human_request_transfers(db_session, vector_db, embedding_provider, restaurant):
@@ -222,12 +261,20 @@ async def test_sentiment_based_escalation_short_circuits_intent_classification(d
 
     result = await engine.handle_turn(context, "This is ridiculous, nobody is helping me!")
 
-    assert result.should_transfer is True
-    assert result.transfer_reason == "escalation"
+    # Offers a transfer rather than forcing one — see
+    # ConversationState.CONFIRM_TRANSFER's docstring.
+    assert result.should_transfer is False
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "escalation"
     assert not any("Respond with exactly one of these labels" in call for call in llm.calls)
 
+    result2 = await engine.handle_turn(context, "Yes, connect me")
+    assert result2.should_transfer is True
+    assert result2.transfer_reason == "escalation"
+    assert context.state == ConversationState.TRANSFER_TO_HUMAN
 
-async def test_repeated_unclear_intent_escalates(db_session, vector_db, embedding_provider, restaurant):
+
+async def test_repeated_unclear_intent_offers_a_transfer(db_session, vector_db, embedding_provider, restaurant):
     llm = ScriptedLLMProvider(
         [
             (contains("decide if it needs to be handed off"), "NO"),
@@ -242,8 +289,16 @@ async def test_repeated_unclear_intent_escalates(db_session, vector_db, embeddin
     assert context.state == ConversationState.IDENTIFY_INTENT
 
     r2 = await engine.handle_turn(context, "asdkjf again")
-    assert r2.should_transfer is True
-    assert r2.transfer_reason == "repeated_unclear"
+    # Offers a transfer rather than forcing one — see
+    # ConversationState.CONFIRM_TRANSFER's docstring.
+    assert r2.should_transfer is False
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "repeated_unclear"
+
+    r3 = await engine.handle_turn(context, "sure, go ahead")
+    assert r3.should_transfer is True
+    assert r3.transfer_reason == "repeated_unclear"
+    assert context.state == ConversationState.TRANSFER_TO_HUMAN
 
 
 async def test_unclear_count_resets_after_successful_intent(db_session, vector_db, embedding_provider, restaurant):

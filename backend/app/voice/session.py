@@ -29,6 +29,7 @@ from app.audio.codec import mulaw_to_pcm16, pcm16_to_mulaw, pcm16_to_wav_bytes, 
 from app.audio.vad import TurnDetector
 from app.conversation.engine import ConversationEngine, TurnResult
 from app.conversation.state import ConversationContext, ConversationState
+from app.core.config import settings
 from app.core.metrics import active_calls
 from app.db.models import Call, CallOutcomeEnum, Restaurant
 from app.providers.embedding.base import EmbeddingProvider
@@ -46,12 +47,15 @@ _WHISPER_SAMPLE_RATE = 16000
 _PLAYBACK_TAIL_BUFFER_S = 0.2
 
 # Spoken immediately after transcribing the caller's utterance, before
-# the (potentially slow — CPU-only local inference can take 10-30+
-# seconds per turn across escalation-check/intent/extraction/generation
-# calls) conversation engine runs. Without this, the caller hears
-# total silence for that whole window, which reads exactly like a
-# dropped call — observed live to cause the caller (or their carrier's
-# own silence detection) to hang up before the real answer is ready.
+# the conversation engine runs — but only when settings.SPEAK_PROCESSING_FILLER
+# is True (local Ollama on CPU; see its own docstring in app/core/config.py).
+# Without it there, the caller hears total silence for the 10-30+
+# seconds local inference can take, which reads exactly like a dropped
+# call — observed live to cause the caller (or their carrier's own
+# silence detection) to hang up before the real answer is ready. A fast
+# hosted provider doesn't need this, and speaking it unconditionally
+# would just add a stilted, robotic beat before a reply that was going
+# to arrive quickly anyway.
 # Deliberately not added to context.history or the DB transcript (see
 # _process_utterance) — it's a UX filler, not part of the actual
 # conversational exchange the engine or a human reviewer should see.
@@ -135,7 +139,8 @@ class CallSession:
 
         await call_service.append_transcript_turn(self.db, self.call, "caller", text, confidence)
 
-        await self._speak(_PROCESSING_FILLER)
+        if settings.SPEAK_PROCESSING_FILLER:
+            await self._speak(_PROCESSING_FILLER)
 
         result = await self.engine.handle_turn(self.context, text, call_sid=self.call.call_sid)
 

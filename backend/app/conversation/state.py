@@ -17,16 +17,24 @@ class ConversationState(str, Enum):
     """
     A caller is always in exactly one of these states.
 
-    FAQ, ORDER, and HUMAN handoff don't need their own "parked" states —
-    they're single-turn branches handled inline from IDENTIFY_INTENT and
-    then either stay in IDENTIFY_INTENT (FAQ, ready for the next
-    question) or move to TRANSFER_TO_HUMAN (ORDER/HUMAN/escalation).
+    FAQ doesn't need its own "parked" state — it's a single-turn branch
+    handled inline from IDENTIFY_INTENT, staying in IDENTIFY_INTENT
+    afterward, ready for the next question. HUMAN (the caller
+    explicitly asking for a person) is also immediate, straight to
+    TRANSFER_TO_HUMAN — asking "would you like a human?" when they just
+    said exactly that would be a redundant, irritating extra turn.
+    Every other transfer trigger (ORDER, sentiment-based escalation,
+    repeated UNCLEAR) instead parks in CONFIRM_TRANSFER first: the
+    engine offers a handoff rather than silently forcing one, the way a
+    human agent would ask "would you like me to get someone for you?"
+    rather than just transferring the call on their own judgment.
     """
 
     GREETING = "GREETING"
     IDENTIFY_INTENT = "IDENTIFY_INTENT"
     RESERVATION_COLLECTING = "RESERVATION_COLLECTING"
     RESERVATION_CONFIRMING = "RESERVATION_CONFIRMING"
+    CONFIRM_TRANSFER = "CONFIRM_TRANSFER"
     TRANSFER_TO_HUMAN = "TRANSFER_TO_HUMAN"
     ENDED = "ENDED"
 

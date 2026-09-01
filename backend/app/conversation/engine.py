@@ -56,6 +56,16 @@ _RESERVATION_FIELD_PROMPTS = {
 _CONFIRM_WORDS = ("yes", "yeah", "yep", "correct", "that's right", "sounds good", "confirm", "go ahead")
 _DENY_WORDS = ("no", "wrong", "change", "actually", "incorrect")
 
+# What to ask when offering a transfer (see _offer_transfer) — keyed by
+# the same reason strings should_escalate/classify_intent/unclear-count
+# handling already produce. Falls back to a generic phrasing for any
+# reason not listed here.
+_OFFER_TRANSFER_PROMPTS = {
+    "order_request": "I'm not able to take orders directly — would you like me to connect you with someone who can help with that?",
+    "escalation": "I want to make sure you get the help you need — would you like me to connect you with a team member?",
+    "repeated_unclear": "I'm having a hard time understanding — would you like me to connect you with a team member instead?",
+}
+
 
 @dataclass
 class TurnResult:
@@ -102,6 +112,9 @@ class ConversationEngine:
         if context.state == ConversationState.RESERVATION_CONFIRMING:
             return await self._handle_reservation_confirming(context, message, call_sid)
 
+        if context.state == ConversationState.CONFIRM_TRANSFER:
+            return self._handle_confirm_transfer(context, message)
+
         # TRANSFER_TO_HUMAN / ENDED: a live call shouldn't reach the engine
         # again in these states (Phase 5 will have transferred or hung up),
         # but handle it gracefully rather than raising.
@@ -113,7 +126,7 @@ class ConversationEngine:
 
     async def _handle_identify_intent(self, context: ConversationContext, message: str) -> TurnResult:
         if await should_escalate(self.llm, self.restaurant.name, context, message):
-            return self._transfer(context, "escalation")
+            return self._offer_transfer(context, "escalation")
 
         intent = await classify_intent(self.llm, self.restaurant.name, context, message)
 
@@ -121,7 +134,7 @@ class ConversationEngine:
             return self._transfer(context, "caller_requested_human")
 
         if intent == "ORDER":
-            return self._transfer(context, "order_request")
+            return self._offer_transfer(context, "order_request")
 
         if intent == "RESERVATION":
             context.unclear_count = 0
@@ -138,7 +151,7 @@ class ConversationEngine:
         # UNCLEAR
         context.unclear_count += 1
         if context.unclear_count >= _MAX_UNCLEAR_BEFORE_ESCALATION:
-            return self._transfer(context, "repeated_unclear")
+            return self._offer_transfer(context, "repeated_unclear")
         return self._say(context, "I'm sorry, could you tell me a bit more about what you need?")
 
     async def _handle_faq(self, context: ConversationContext, message: str) -> TurnResult:
@@ -222,12 +235,54 @@ class ConversationEngine:
         return TurnResult(response_text=text, state=context.state)
 
     def _transfer(self, context: ConversationContext, reason: str) -> TurnResult:
+        """
+        Transfer immediately, no confirmation asked. Only for
+        "caller_requested_human" — they already explicitly asked for a
+        person, so asking "would you like a human?" back would be a
+        redundant, irritating extra turn. Every other transfer trigger
+        goes through _offer_transfer instead.
+        """
         context.state = ConversationState.TRANSFER_TO_HUMAN
         context.transfer_reason = reason
-        text = (
-            "I'd be happy to connect you with a team member to place your order."
-            if reason == "order_request"
-            else "Let me connect you with a team member who can help."
-        )
+        text = "Let me connect you with a team member who can help."
         context.add_turn("assistant", text)
         return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
+
+    def _offer_transfer(self, context: ConversationContext, reason: str) -> TurnResult:
+        """
+        Ask before transferring, rather than forcing a handoff on the
+        engine's own judgment — the way a human agent would say "would
+        you like me to get someone for you?" instead of silently
+        forwarding the call. context.transfer_reason holds the reason
+        while parked in CONFIRM_TRANSFER; should_transfer only becomes
+        True once _handle_confirm_transfer sees the caller actually
+        agree.
+        """
+        context.state = ConversationState.CONFIRM_TRANSFER
+        context.transfer_reason = reason
+        text = _OFFER_TRANSFER_PROMPTS.get(
+            reason, "Would you like me to connect you with a team member who can help?"
+        )
+        context.add_turn("assistant", text)
+        return TurnResult(response_text=text, state=context.state)
+
+    def _handle_confirm_transfer(self, context: ConversationContext, message: str) -> TurnResult:
+        normalized = message.strip().lower()
+
+        if any(word in normalized for word in _CONFIRM_WORDS):
+            reason = context.transfer_reason
+            context.state = ConversationState.TRANSFER_TO_HUMAN
+            text = "Okay, connecting you now."
+            context.add_turn("assistant", text)
+            return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
+
+        if any(word in normalized for word in _DENY_WORDS):
+            context.state = ConversationState.IDENTIFY_INTENT
+            context.transfer_reason = None
+            # A fresh start on identifying what they need — the UNCLEAR
+            # streak (if any) that led here shouldn't count against a
+            # caller who just chose to keep talking to the AI instead.
+            context.unclear_count = 0
+            return self._say(context, "No problem — is there anything else I can help with?")
+
+        return self._say(context, "Sorry, would you like me to connect you with a team member?")
