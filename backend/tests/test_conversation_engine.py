@@ -505,3 +505,97 @@ async def test_booking_a_new_table_still_works_for_a_caller_who_already_has_one(
 
     assert "5 people" not in result.response_text
     assert context.state == ConversationState.CONFIRM_TRANSFER
+
+
+# ----------------------------------------------------------------------
+# Confirm/deny matching
+# ----------------------------------------------------------------------
+
+
+async def test_a_word_containing_no_is_not_read_as_declining(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "You are not answering my question" was matched against "no" by
+    substring and treated as declining the transfer — so the caller got
+    neither their question answered nor the transfer they'd asked for.
+    """
+    from app.conversation.engine import _says_any_of
+
+    assert _says_any_of("no", ("no",))
+    assert _says_any_of("No, thanks", ("no",))
+    assert not _says_any_of("You are not answering my question", ("no",))
+    assert not _says_any_of("I don't know the address", ("no",))
+    assert not _says_any_of("Can I order now?", ("no",))
+
+
+async def test_sure_is_accepted_as_a_confirmation(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "ORDER"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I'd like to place an order")
+    result = await engine.handle_turn(context, "Sure")
+
+    assert result.should_transfer is True
+
+
+async def test_a_question_during_a_transfer_offer_gets_answered(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    A caller answered a transfer offer with "sure, but before you
+    transfer me, can you tell me what's your name?" — and got the offer
+    repeated back verbatim, twice, until they said "you are not
+    answering my question."
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "ORDER"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I'd like to place an order")
+    result = await engine.handle_turn(context, "Before that, what's your name?")
+
+    assert restaurant.name in result.response_text
+    # The offer is still on the table — answering the aside must not
+    # quietly drop what the caller was in the middle of.
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert "connect you" in result.response_text
+
+
+async def test_out_of_scope_questions_are_declined_without_a_pointless_transfer(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "What's the weather like?" and "how's the traffic?" cycled through
+    "could you tell me a bit more about what you need?" and then pulled
+    the seating and parking documents to answer from. A restaurant can't
+    tell you the weather, and transferring the caller to a team member
+    for it helps nobody.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "OUT_OF_SCOPE"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    result = await engine.handle_turn(context, "What's the weather like today?")
+
+    assert result.should_transfer is False
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert "sorry, could you tell me" not in result.response_text.lower()

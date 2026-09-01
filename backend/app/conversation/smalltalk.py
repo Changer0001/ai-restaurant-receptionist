@@ -67,6 +67,38 @@ def is_identity_question(message: str) -> bool:
     return any(phrase in lowered for phrase in _IDENTITY_PHRASES)
 
 
+_OUT_OF_SCOPE_REPLIES = (
+    "That one's outside what I can help with, I'm afraid — I only know about things here at the restaurant. Anything I can help with on that side?",
+    "I couldn't tell you that one, sorry. I can help with anything about the restaurant itself though — what were you after?",
+    "That's a bit beyond me, I'm afraid. I'm happy to help with anything about us though.",
+)
+
+
+def out_of_scope_reply() -> str:
+    """
+    For a question a restaurant's phone line simply can't answer — the
+    weather, the traffic, general knowledge.
+
+    A real caller asked about the weather and about traffic from
+    downtown. Both cycled through "I'm sorry, could you tell you me a
+    bit more about what you need?" and then pulled seating and parking
+    documents to answer from. Saying plainly that it's not something we
+    can help with is both more honest and far more human than either.
+    """
+    return random.choice(_OUT_OF_SCOPE_REPLIES)
+
+
+def identity_answer(restaurant_name: str) -> str:
+    """
+    Who the caller is speaking to, as a statement — no trailing question.
+
+    Kept separate from reply_to so it can be used mid-flow (e.g. while a
+    transfer offer is pending) without asking the caller a second
+    question on top of the one already waiting for them.
+    """
+    return f"I'm the assistant here at {restaurant_name}."
+
+
 def is_farewell(message: str) -> bool:
     """Whether the caller is wrapping the call up, not just acknowledging."""
     lowered = message.lower()
@@ -82,7 +114,7 @@ def reply_to(message: str, restaurant_name: str) -> str:
     if is_identity_question(message):
         # Warm, honest, and moves on — this is an aside in the caller's
         # actual call, not a topic to dwell on.
-        return f"I'm the assistant here at {restaurant_name}. What can I help you with?"
+        return f"{identity_answer(restaurant_name)} What can I help you with?"
 
     if is_farewell(message):
         return random.choice(_GOODBYE_REPLIES)

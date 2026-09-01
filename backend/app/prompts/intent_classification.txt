@@ -7,6 +7,7 @@ RESERVATION - they explicitly want to book, change, or ask about an actual table
 ORDER - they want to place a food order for pickup or delivery.
 HUMAN - they explicitly ask to be put through to a person, or express frustration with the automated system. A question about who they are speaking to ("what's your name?", "are you a robot?") is NOT this: that asks about you, it does not ask to be transferred to somebody else.
 SMALLTALK - an acknowledgement, thanks, a greeting, a goodbye, or a question about who they're speaking to. There is nothing to look up: "okay", "alright", "got it", "thanks", "that's all", "bye", "what's your name?".
+OUT_OF_SCOPE - something a restaurant's phone line genuinely cannot answer: the weather, traffic or road conditions, news, sports, general knowledge, or anything unrelated to this restaurant.
 UNCLEAR - anything else, or if you are not confident which of the above applies.
 
 Examples:
@@ -33,6 +34,12 @@ Label: SMALLTALK
 
 Caller's latest message: Can you put me through to someone?
 Label: HUMAN
+
+Caller's latest message: What's the weather like today?
+Label: OUT_OF_SCOPE
+
+Caller's latest message: How's the traffic coming to you from downtown?
+Label: OUT_OF_SCOPE
 
 Conversation so far:
 {conversation_history}

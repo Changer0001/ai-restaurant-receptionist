@@ -21,6 +21,7 @@ degrades the caller's experience directly. See docs/architecture.md.
 """
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -55,8 +56,37 @@ _RESERVATION_FIELD_PROMPTS = {
     "party_size": "How many people will be in your party?",
 }
 
-_CONFIRM_WORDS = ("yes", "yeah", "yep", "correct", "that's right", "sounds good", "confirm", "go ahead")
-_DENY_WORDS = ("no", "wrong", "change", "actually", "incorrect")
+_CONFIRM_WORDS = (
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "sure",
+    "ok",
+    "okay",
+    "please",
+    "correct",
+    "that's right",
+    "sounds good",
+    "confirm",
+    "go ahead",
+)
+_DENY_WORDS = ("no", "nope", "not", "don't", "wrong", "change", "incorrect")
+
+
+def _says_any_of(message: str, phrases: tuple[str, ...]) -> bool:
+    """
+    Whole-word matching, not substring.
+
+    "You are not answering my question" was read as a "no" and treated as
+    the caller declining a transfer, because "no" appears inside "not" —
+    the caller was then dropped back to the start having had neither
+    their question answered nor their transfer. "know", "nothing" and
+    "now" all carry the same trap.
+    """
+    padded = f" {re.sub(r'[^a-z0-9 ]+', ' ', message.lower())} "
+    padded = re.sub(r"\s+", " ", padded)
+    return any(f" {re.sub(r'[^a-z0-9 ]+', ' ', phrase)} " in padded for phrase in phrases)
 
 # What to ask when offering a transfer (see _offer_transfer) — keyed by
 # the same reason strings should_escalate/classify_intent/unclear-count
@@ -171,6 +201,13 @@ class ConversationEngine:
 
         if escalate:
             return self._offer_transfer(context, "escalation")
+
+        if intent == "OUT_OF_SCOPE":
+            # Not an escalation and not a knowledge gap — a restaurant
+            # simply doesn't know the weather. Offering to transfer the
+            # caller to a team member for it would waste everyone's time.
+            context.unclear_count = 0
+            return self._say(context, smalltalk.out_of_scope_reply())
 
         if intent == "SMALLTALK":
             context.unclear_count = 0
@@ -311,7 +348,7 @@ class ConversationEngine:
     ) -> TurnResult:
         normalized = message.strip().lower()
 
-        if any(word in normalized for word in _CONFIRM_WORDS):
+        if _says_any_of(normalized, _CONFIRM_WORDS):
             reservation = await create_reservation_request(self.db, self.restaurant, context.reservation_draft, call_sid)
             context.state = ConversationState.IDENTIFY_INTENT
             context.reservation_draft = ReservationDraft()
@@ -323,7 +360,7 @@ class ConversationEngine:
             result.reservation = reservation
             return result
 
-        if any(word in normalized for word in _DENY_WORDS):
+        if _says_any_of(normalized, _DENY_WORDS):
             context.state = ConversationState.RESERVATION_COLLECTING
             return self._say(context, "No problem — what would you like to change?")
 
@@ -372,14 +409,14 @@ class ConversationEngine:
     def _handle_confirm_transfer(self, context: ConversationContext, message: str) -> TurnResult:
         normalized = message.strip().lower()
 
-        if any(word in normalized for word in _CONFIRM_WORDS):
+        if _says_any_of(normalized, _CONFIRM_WORDS):
             reason = context.transfer_reason
             context.state = ConversationState.TRANSFER_TO_HUMAN
             text = "Okay, connecting you now."
             context.add_turn("assistant", text)
             return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
 
-        if any(word in normalized for word in _DENY_WORDS):
+        if _says_any_of(normalized, _DENY_WORDS):
             context.state = ConversationState.IDENTIFY_INTENT
             context.transfer_reason = None
             # A fresh start on identifying what they need — the UNCLEAR
@@ -387,5 +424,17 @@ class ConversationEngine:
             # caller who just chose to keep talking to the AI instead.
             context.unclear_count = 0
             return self._say(context, "No problem — is there anything else I can help with?")
+
+        # A question asked while the offer is pending gets answered, and
+        # the offer stands. A caller asked "sure, but before you transfer
+        # me, what's your name?" and got neither — just the offer
+        # repeated — and said, fairly, "you are not answering my
+        # question."
+        if smalltalk.is_identity_question(message):
+            return self._say(
+                context,
+                f"{smalltalk.identity_answer(self.restaurant.name)} "
+                "Would you still like me to connect you with a team member?",
+            )
 
         return self._say(context, "Sorry, would you like me to connect you with a team member?")

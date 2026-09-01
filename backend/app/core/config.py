@@ -266,6 +266,31 @@ class Settings(BaseSettings):
     # 0.45 here. Raise this if callers start getting answers grounded in
     # loosely-related documents; lower it if real questions go unanswered.
     RAG_RELEVANCE_THRESHOLD: float = 0.45
+
+    # The best chunk must clear this for the knowledge base to count as
+    # having covered the question at all.
+    #
+    # RAG_RELEVANCE_THRESHOLD alone is a floor, and with a knowledge base
+    # of any size *something* always clears a floor. Measured on real
+    # calls, a question the documents genuinely don't cover comes back as
+    # a flat cluster just above it — "what about holidays, Christmas, New
+    # Year's?" returned five chunks at 0.52, 0.50, 0.50, 0.49 and 0.49
+    # (mixed grill, halal, appetizers, parking, shawarma), and the model
+    # was handed all five and asked to answer about holiday hours.
+    #
+    # A question the documents DO cover looks completely different: one
+    # clear winner well above the rest ("how many cars fit in your
+    # parking lot?" -> 0.63 against a tail at 0.46). So a top score that
+    # never rises above the tail is the signal that nothing here actually
+    # answers the question, and saying so is the honest reply.
+    RAG_CONFIDENT_THRESHOLD: float = 0.55
+
+    # Chunks more than this far below the best one are dropped even when
+    # they clear the floor. They're what the tail of that flat cluster is
+    # made of: real, on-topic documents about something else entirely,
+    # which do nothing but give the model room to answer from the wrong
+    # one.
+    RAG_RELATIVE_MARGIN: float = 0.10
     # Knowledge documents are restaurant reference text (menus, policies,
     # FAQs) — 2MB is generous headroom over that while still bounding
     # worst-case chunking/embedding work per upload.

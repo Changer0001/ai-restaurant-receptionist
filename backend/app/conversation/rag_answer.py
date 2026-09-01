@@ -24,7 +24,7 @@ _CONTEXT_DEPENDENT_WORDS = frozenset(
     {"it", "they", "them", "that", "this", "those", "these", "one", "ones", "there"}
 )
 # Very short utterances depend on context even without a pronoun ("let's
-# hear it", "and the price?", "what about drinks?").
+# hear it", "and the price?", "how many minutes early?").
 #
 # Kept deliberately tight. Expansion is not free: adding earlier turns to
 # a question that already stands on its own dilutes the embedding and can
@@ -32,7 +32,7 @@ _CONTEXT_DEPENDENT_WORDS = frozenset(
 # you open on christmas" going from a clean match to no match at all once
 # the preceding turns were prepended. A question that names its own
 # subject is searched exactly as the caller said it.
-_SHORT_UTTERANCE_WORDS = 3
+_SHORT_UTTERANCE_WORDS = 4
 
 
 def _needs_conversation_context(message: str) -> bool:

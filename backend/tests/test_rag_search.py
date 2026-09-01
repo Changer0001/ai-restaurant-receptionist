@@ -114,3 +114,50 @@ async def test_delete_document_removes_it_from_search(db_session, vector_db, emb
         vector_db, embedding_provider, "restaurant-a", "unmistakable placeholder", relevance_threshold=0.0
     )
     assert after == []
+
+
+# ----------------------------------------------------------------------
+# Confidence filtering
+#
+# A relevance floor alone isn't enough once a knowledge base has any
+# breadth: on a real call, "what about holidays, Christmas, New Year's?"
+# returned five chunks between 0.49 and 0.52 — mixed grill, halal,
+# appetizers, parking, shawarma — none about holidays, and the model was
+# handed all five and asked to answer.
+# ----------------------------------------------------------------------
+
+from app.rag.vector_db import RetrievedChunk  # noqa: E402
+from app.services.knowledge_service import _keep_confident_matches  # noqa: E402
+
+
+def _chunk(similarity: float, content: str = "x") -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id="c",
+        document_id="d",
+        content=content,
+        similarity=similarity,
+        metadata={},
+    )
+
+
+def test_a_flat_cluster_just_above_the_floor_is_treated_as_no_answer():
+    # The real scores from the holidays question.
+    chunks = [_chunk(s) for s in (0.5174, 0.5017, 0.5004, 0.4930, 0.4883)]
+    assert _keep_confident_matches(chunks) == []
+
+
+def test_a_clear_winner_is_kept_and_its_weak_tail_dropped():
+    # The real scores from "how many cars fit in your parking lot?".
+    chunks = [_chunk(s) for s in (0.6314, 0.4658, 0.4541, 0.4525, 0.4507)]
+    kept = _keep_confident_matches(chunks)
+    assert [c.similarity for c in kept] == [0.6314]
+
+
+def test_several_genuinely_strong_matches_are_all_kept():
+    chunks = [_chunk(s) for s in (0.72, 0.68, 0.65, 0.44)]
+    kept = _keep_confident_matches(chunks)
+    assert [c.similarity for c in kept] == [0.72, 0.68, 0.65]
+
+
+def test_no_chunks_stays_empty():
+    assert _keep_confident_matches([]) == []

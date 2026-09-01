@@ -117,6 +117,39 @@ async def reindex_document(
     return document
 
 
+def _keep_confident_matches(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """
+    Drop results that clear the relevance floor without actually
+    answering anything.
+
+    Two rules, both from measured behavior on real calls:
+
+    1. If even the best chunk doesn't reach RAG_CONFIDENT_THRESHOLD,
+       return nothing. A question the documents genuinely don't cover
+       produces a flat cluster just above the floor rather than silence —
+       "what about holidays, Christmas, New Year's?" returned five chunks
+       between 0.49 and 0.52, none of which mentioned holidays, and the
+       model was asked to answer holiday hours from them.
+
+    2. Drop anything much weaker than the best chunk. A question that IS
+       covered has a clear winner ("how many cars fit in your parking
+       lot?" -> 0.63 with a tail at 0.46); the tail is just other
+       documents about other things, and handing it to the model only
+       invites an answer drawn from the wrong one.
+
+    Chunks arrive best-first from the vector store.
+    """
+    if not chunks:
+        return []
+
+    best = chunks[0].similarity
+    if best < settings.RAG_CONFIDENT_THRESHOLD:
+        return []
+
+    cutoff = best - settings.RAG_RELATIVE_MARGIN
+    return [chunk for chunk in chunks if chunk.similarity >= cutoff]
+
+
 async def search_knowledge(
     vector_db: VectorDB,
     embedder: EmbeddingProvider,
@@ -133,12 +166,21 @@ async def search_knowledge(
     license to answer from the model's own general knowledge.
     """
     query_embedding = (await embedder.embed([query]))[0]
-    return await vector_db.search(
+    chunks = await vector_db.search(
         restaurant_id=restaurant_id,
         query_embedding=query_embedding,
         top_k=top_k or settings.RAG_RETRIEVAL_TOP_K,
         relevance_threshold=relevance_threshold if relevance_threshold is not None else settings.RAG_RELEVANCE_THRESHOLD,
     )
+
+    # An explicit threshold means the caller is asking for exactly what
+    # clears that bar (tests, the admin search API) — don't second-guess
+    # it. The confidence rules below are for a live phone call, where
+    # answering from a weak match is worse than admitting a gap.
+    if relevance_threshold is not None:
+        return chunks
+
+    return _keep_confident_matches(chunks)
 
 
 async def _index_document(

@@ -56,3 +56,24 @@ def test_farewell_reply_closes_warmly_without_asking_another_question():
     reply = reply_to("Okay that's all, bye", _RESTAURANT)
     assert "anything else" not in reply.lower()
     assert "thank" in reply.lower() or "care" in reply.lower() or "day" in reply.lower()
+
+
+def test_identity_answer_is_a_statement_not_another_question():
+    """
+    Used mid-flow (e.g. while a transfer offer is pending), so it must
+    not ask the caller a second question on top of the one already
+    waiting for them.
+    """
+    from app.conversation.smalltalk import identity_answer
+
+    answer = identity_answer(_RESTAURANT)
+    assert _RESTAURANT in answer
+    assert "?" not in answer
+
+
+def test_out_of_scope_reply_does_not_ask_the_caller_to_repeat_themselves():
+    from app.conversation.smalltalk import out_of_scope_reply
+
+    reply = out_of_scope_reply()
+    assert "tell me a bit more" not in reply.lower()
+    assert len(reply) > 0
