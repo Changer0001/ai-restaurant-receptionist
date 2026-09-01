@@ -196,23 +196,32 @@ async def test_full_reservation_flow_creates_reservation_and_sets_outcome(
     assert reservation.call_sid == "CA_test"
 
 
-async def test_order_request_sets_should_close_and_transferred_outcome(
+async def test_order_request_offers_a_transfer_before_closing(
     db_session, restaurant, vector_db, embedding_provider
 ):
+    """
+    The engine now asks before transferring on an order request (see
+    ConversationState.CONFIRM_TRANSFER's docstring) rather than closing
+    the call on the first turn — should_close only flips True once the
+    caller actually agrees to be connected.
+    """
     llm = ScriptedLLMProvider(
         [
             (contains("decide if it needs to be handed off"), "NO"),
             (contains("Respond with exactly one of these labels"), "ORDER"),
         ]
     )
-    stt = ScriptedSTTProvider([("I want to order two burgers", 0.9)])
+    stt = ScriptedSTTProvider([("I want to order two burgers", 0.9), ("Yes please", 0.9)])
     session, _sender = await _make_session(
         db_session, restaurant, vector_db, embedding_provider, llm, stt
     )
     session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
 
     await session._process_utterance()
+    assert session.should_close is False
+    assert session.context.state == ConversationState.CONFIRM_TRANSFER
 
+    await session._process_utterance()
     assert session.should_close is True
     assert session.final_outcome == CallOutcomeEnum.CALL_TRANSFERRED
 

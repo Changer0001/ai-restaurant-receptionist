@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import Settings
 from app.db import models  # noqa: F401 - registers all models on Base.metadata
 from app.db.base import Base
 from app.db.session import get_db_session
@@ -24,6 +25,23 @@ from app.main import app
 from app.providers.embedding import get_embedding_provider
 from app.rag.vector_db import VectorDB, get_vector_db
 from tests.fakes import FakeEmbeddingProvider
+
+
+@pytest.fixture(autouse=True)
+def _disable_processing_filler(monkeypatch):
+    """
+    Give every test a deterministic CallSession audio-frame count.
+
+    settings.SPEAK_PROCESSING_FILLER exists purely to cover local
+    Ollama's live-call CPU latency (see its own docstring in
+    app/core/config.py) — it's not something any test here means to
+    exercise. Left on, it defaults True (LLM_PROVIDER defaults to
+    "ollama"), which silently adds one extra sent audio frame per
+    caller turn — breaking exact `sender.sent` counts and, worse, a
+    websocket test's single `receive_json()` call, which would then
+    receive the filler's audio instead of the real response.
+    """
+    monkeypatch.setattr(Settings, "SPEAK_PROCESSING_FILLER", False)
 
 
 @pytest_asyncio.fixture
