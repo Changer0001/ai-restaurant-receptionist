@@ -71,8 +71,12 @@ trap cleanup EXIT
 echo "==> Waiting for ngrok's public URL..."
 NGROK_URL=""
 for _ in $(seq 1 30); do
+  # `|| true` matters here under `set -e -o pipefail`: grep exits 1 on
+  # no match (expected on early loop iterations before ngrok's local
+  # API has anything to report), and without it that failure would
+  # abort the whole script instead of just this iteration — hit live.
   NGROK_URL="$(curl -sS http://127.0.0.1:4040/api/tunnels 2>/dev/null \
-    | grep -o '"public_url":"https://[^"]*"' | head -1 | sed 's/"public_url":"//;s/"$//')"
+    | grep -o '"public_url":"https://[^"]*"' | head -1 | sed 's/"public_url":"//;s/"$//' || true)"
   [ -n "$NGROK_URL" ] && break
   sleep 1
 done
@@ -120,13 +124,21 @@ else
     echo "$TWILIO_NUMBER" > "$NUMBER_CACHE"
   fi
 
-  PHONE_SID="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-    "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PhoneNumber=$TWILIO_NUMBER" \
-    | grep -o '"sid":"[^"]*"' | head -1 | sed 's/"sid":"//;s/"$//')"
+  # Captured separately from the grep/sed pipeline (rather than piped
+  # straight in) for two reasons: so the raw response is available to
+  # print if the lookup fails, and so a no-match grep (exit 1) can't
+  # abort the whole script under `set -e -o pipefail` — hit live,
+  # silently killing this script (including its EXIT trap tearing down
+  # ngrok) right after printing the cached phone number, before ever
+  # reaching the "Could not find" fallback below or starting uvicorn.
+  PHONE_LOOKUP_RESPONSE="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+    "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PhoneNumber=$TWILIO_NUMBER")"
+  PHONE_SID="$(echo "$PHONE_LOOKUP_RESPONSE" | grep -o '"sid":"[^"]*"' | head -1 | sed 's/"sid":"//;s/"$//' || true)"
 
   if [ -z "$PHONE_SID" ]; then
     echo "    Could not find $TWILIO_NUMBER on this Twilio account — update the webhook manually:"
     echo "    $VOICE_WEBHOOK_URL"
+    echo "    Twilio's lookup response was: $PHONE_LOOKUP_RESPONSE"
   else
     curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" -X POST \
       "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
