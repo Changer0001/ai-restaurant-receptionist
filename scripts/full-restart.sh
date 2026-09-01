@@ -148,6 +148,25 @@ else
   fi
 fi
 
+# --- Free port 8010 -------------------------------------------------------
+# A uvicorn from an earlier run of this same script (e.g. a terminal
+# that was closed instead of Ctrl+C'd, or a crash that skipped this
+# script's own cleanup) can be left holding port 8010. Without this,
+# the new uvicorn below fails immediately with "address already in
+# use" — hit live: the script printed "Starting the backend" and then
+# died right after, with no indication a leftover process was the
+# cause. 8010 is a dev-only port this project deliberately chose to
+# avoid conflicting with anything else on the machine, so anything
+# bound to it here is assumed to be our own stale process.
+if command -v lsof >/dev/null 2>&1; then
+  STALE_PIDS="$(lsof -ti tcp:8010 2>/dev/null || true)"
+  if [ -n "$STALE_PIDS" ]; then
+    echo "==> Killing stale process(es) on port 8010 from a previous run: $STALE_PIDS"
+    kill $STALE_PIDS 2>/dev/null || true
+    sleep 1
+  fi
+fi
+
 # --- Start the backend -----------------------------------------------------
 echo "==> Starting the backend (uvicorn on port 8010)..."
 cd "$PROJECT_ROOT/backend"
