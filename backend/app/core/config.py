@@ -76,15 +76,20 @@ class Settings(BaseSettings):
     OLLAMA_REQUEST_TIMEOUT: int = 60
 
     # Groq's OpenAI-compatible chat completions API. Free tier as of
-    # this writing; llama-3.3-70b-versatile is a much stronger
+    # this writing. openai/gpt-oss-120b is a much stronger
     # instruction-follower than a local 3B model can be on CPU (this
     # project's own prompts needed few-shot examples to work around
     # exactly that gap — see app/prompts/), and Groq's inference is
     # fast enough that it doesn't reintroduce the CPU-latency problem
-    # local Ollama had. llama-3.1-8b-instant is a faster/cheaper
-    # alternative if 70b's latency or free-tier limits become an issue.
+    # local Ollama had. openai/gpt-oss-20b is a faster/cheaper
+    # alternative if 120b's latency or free-tier limits become an
+    # issue. (Not llama-3.3-70b-versatile/llama-3.1-8b-instant — Groq
+    # decommissioned both; hit live as a 404 from every chat completion
+    # call. Verify current model IDs at
+    # https://console.groq.com/docs/deprecations before relying on any
+    # specific one long-term — Groq's lineup changes.)
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_REQUEST_TIMEOUT: int = 30
 
     # Separate embedding model — embedding models are purpose-built and
@@ -261,6 +266,23 @@ class Settings(BaseSettings):
     def IS_DEVELOPMENT(self) -> bool:
         """Check if running in development."""
         return self.ENVIRONMENT.lower() == "development"
+
+    @property
+    def SPEAK_PROCESSING_FILLER(self) -> bool:
+        """
+        Whether CallSession should speak a brief "one moment" filler
+        right after transcribing the caller (see app/voice/session.py)
+        before running the conversation engine.
+
+        Only worth it for local Ollama on CPU, where a turn can take
+        10-30+ seconds — without it, that's total silence, which reads
+        as a dropped call. A hosted provider like Groq responds fast
+        enough that the filler would just be an odd, robotic-sounding
+        extra beat before an otherwise-fast reply — real human
+        conversation doesn't insert "let me check that" before every
+        single answer, so a fast provider skips it.
+        """
+        return self.LLM_PROVIDER == "ollama"
 
     @property
     def ALLOWED_HOSTS(self) -> List[str]:

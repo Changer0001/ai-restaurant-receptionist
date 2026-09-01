@@ -80,9 +80,9 @@ async def test_health_check_false_on_failure():
 async def test_list_models_parses_ids():
     provider = GroqLLMProvider(api_key="test-key", model="test-model")
     provider.client.get = AsyncMock(
-        return_value=_fake_response({"data": [{"id": "llama-3.3-70b-versatile"}, {"id": "llama-3.1-8b-instant"}]})
+        return_value=_fake_response({"data": [{"id": "openai/gpt-oss-120b"}, {"id": "openai/gpt-oss-20b"}]})
     )
-    assert await provider.list_models() == ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    assert await provider.list_models() == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 
 
 async def test_list_models_returns_empty_on_failure():
