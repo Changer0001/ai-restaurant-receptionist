@@ -36,10 +36,25 @@
 # Holiday hours DO belong here — that's the one hours case the structured
 # table can't express.
 #
-# The content is for Mal Al Sham - The Taste of Damascus, compiled from
-# the restaurant's public listings. VERIFY PRICES AND DETAILS WITH THE
-# RESTAURANT before using this with real callers — third-party listings
-# go stale, and a confidently wrong price is worse than no price at all.
+# The content is for Mal Al Sham - The Taste of Damascus.
+#
+# Prices below are the restaurant's OWN published prices (malalsham.com),
+# not the ones on the delivery aggregators. That distinction is the whole
+# reason the two disagree: hummus is 8.99 on the restaurant's own menu
+# and 9.99 on Uber Eats/Postmates, because delivery platforms mark prices
+# up to cover their commission. A caller on the phone is asking about
+# dining in or picking up, so the restaurant's own price is the correct
+# answer, and quoting an aggregator's marked-up price would be wrong in
+# the caller's favor to complain about later.
+#
+# Where only an aggregator price was available (falafel, foul, the
+# salads), no price is stated at all and the document tells the assistant
+# to offer to have the team confirm it — better a short "the team can
+# tell you exactly" than a confidently wrong number.
+#
+# STILL VERIFY WITH THE RESTAURANT before real callers hear any of this:
+# a published menu can be months out of date, and the owner is the only
+# authority on what they charge today.
 # ---------------------------------------------------------------------
 
 set -euo pipefail
@@ -129,27 +144,37 @@ We serve breakfast, lunch and dinner, and we do desserts and Middle Eastern drin
 EOF
 
 cat > "$TMP_DIR/menu_grill_and_shawarma.txt" << 'EOF'
-Do you have shawarma? What kind of shawarma do you have? Do you have kebabs? What grill dishes do you have? How much is the shawarma? What does a platter cost? How much are your plates?
+Do you have shawarma? What kind of shawarma do you have? Do you have kebabs? What grill dishes do you have? How much is the shawarma? What does a platter cost? How much are your plates? How much does that cost?
 
-Beef shawarma — marinated beef carved fresh off the rotisserie, served with tahina sauce — is about 18.99.
+Beef shawarma — marinated beef carved fresh off the rotisserie, served with tahina sauce — is 18.99.
 
-Chicken shawarma — marinated chicken off the spit with our garlic sauce — is about 16.99.
+Chicken shawarma — marinated chicken off the spit with our garlic sauce — is 16.99.
 
-The mixed grill, with beef kebab, chicken kebab, beef tikka and chicken tikka, all charcoal grilled, is about 24.99. Fried kibbeh stuffed with spiced ground beef and walnuts is about 14.99. Shawarma fries, topped with beef or chicken shawarma with tahini and garlic paste, are about 14.99.
+The mixed grill, with beef kebab, chicken kebab, beef tikka and chicken tikka, all charcoal grilled, is 24.99.
 
-When a caller asks about a price, give the price and mention that prices can change, so the team can confirm the exact amount.
+Fried kibbeh stuffed with spiced ground beef and walnuts is 14.99.
+
+Shawarma fries, topped with beef or chicken shawarma with tahini and garlic paste, are 14.99.
+
+These are our prices for dining in and for pickup. Ordering through a delivery app costs more, because the apps set their own higher prices.
+
+For the price of anything not listed here, say the kitchen team can give them the exact price.
 EOF
 
 cat > "$TMP_DIR/menu_appetizers.txt" << 'EOF'
-What appetizers do you have? Do you have hummus? Do you have falafel? What salads do you have? Do you have manakeesh? Do you serve breakfast? What are your starters?
+What appetizers do you have? Do you have hummus? How much is the hummus? Do you have falafel? What salads do you have? Do you have manakeesh? Do you serve breakfast? What are your starters?
 
-We have hummus made fresh daily — chickpeas blended with tahina, lemon and olive oil. Falafel comes as a dish of twelve balls with tahina, tomatoes and chopped parsley, served with pickles and pita bread.
+We have hummus made fresh daily — chickpeas blended with tahina, lemon and olive oil — for 8.99.
+
+Falafel comes as a dish of twelve balls with tahina, tomatoes and chopped parsley, served with pickles and pita bread.
 
 Our salads include fattoush: tomato, cucumber, red onion, lettuce and parsley with lemon juice, topped with baked pita chips and pomegranate molasses.
 
 We also do baba ghanoush, baked eggplant mashed with tahina, yogurt, lemon and garlic; and foul, slow-boiled fava beans with tomato, parsley, lemon, garlic and olive oil.
 
-Manakeesh, our fresh-baked flatbread with zaatar and olive oil, is a morning item — we serve it in the mornings only.
+Manakeesh, our fresh-baked flatbread with zaatar and olive oil, is 8.99, and it's a morning item — we serve it in the mornings only.
+
+For the price of any starter or salad not listed here, say the team can give them the exact price.
 EOF
 
 cat > "$TMP_DIR/ordering_and_catering.txt" << 'EOF'
