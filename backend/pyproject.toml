@@ -52,7 +52,16 @@ dependencies = [
     "bcrypt==4.1.1",
 
     # HTTP Client
-    "httpx==0.25.1",
+    # Was 0.25.1 — bumped for chromadb==0.5.7 above, which requires
+    # httpx>=0.27.0 (hit as a real pip resolution conflict: "chromadb
+    # 0.5.7 depends on httpx>=0.27.0"). 0.27.2 is the last patch release
+    # in that minor line. Checked our own usage (app/providers/llm/
+    # ollama_provider.py, groq_provider.py, embedding/ollama_provider.py)
+    # against httpx's changelog between 0.25.1 and 0.27.2 — all of it is
+    # plain httpx.AsyncClient(base_url=, headers=, timeout=)/.get()/.post()/
+    # httpx.HTTPError, none of the removed/changed APIs in that range
+    # (the deprecated `proxies=` kwarg, SSL context handling).
+    "httpx==0.27.2",
     "aiohttp==3.9.1",
 
     # AI/ML
@@ -141,7 +150,7 @@ dev = [
     "mypy==1.7.1",
     "types-redis==4.6.0.11",
     "types-aiofiles==23.2.0",
-    "httpx[cli]==0.25.1",
+    "httpx[cli]==0.27.2",
     # The async SQLite driver every test's db_engine fixture uses
     # (sqlite+aiosqlite:///:memory:) — test-only, never used in
     # production (which always talks to Postgres via asyncpg), so it
