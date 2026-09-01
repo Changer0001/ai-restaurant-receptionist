@@ -42,22 +42,30 @@ services:
       - app-network
 
   chromadb:
-    # Pinned (not `:latest`, which drifts forward on every fresh pull
-    # while backend/pyproject.toml's Python client stays pinned to an
-    # exact chromadb==0.4.21 — see that file's own comments) to a
-    # server version verified compatible with that exact client:
-    #   - Its REST API still serves /api/v1/tenants/{tenant} etc. — the
-    #     0.4.21 client's actual calls (ChromaDB broke this in later
-    #     major versions, moving to /api/v2/...).
+    # Pinned (not `:latest`, which drifts forward on every fresh pull)
+    # to exactly match backend/pyproject.toml's chromadb Python client
+    # pin — see that file's own comments. They were briefly mismatched
+    # (server 0.5.7, client left at 0.4.21) on the theory that 0.5.7
+    # still served the v1 REST routes the older client called; that
+    # part held, but it masked a real, separate incompatibility: the
+    # 0.4.21 client's create_collection request has no `configuration`
+    # field at all (only the legacy `metadata`), and this server
+    # version doesn't derive a collection's real HNSW distance metric
+    # from that legacy metadata — every collection silently got created
+    # with the "l2" default regardless of the client's requested
+    # "cosine", breaking every similarity score the app computed. Server
+    # and client are kept at the exact same version now specifically to
+    # avoid this class of mismatch recurring.
+    #
+    # 0.5.7 itself was chosen (of the versions compatible with the
+    # client's own now-current pin) because:
     #   - Its own server code doesn't crash on import: 0.4.21 through
     #     0.5.5's chromadb/api/types.py uses `np.float_`, removed in
     #     NumPy 2.0 — every one of those *server* image builds crashes
     #     on startup against a NumPy 2.0 bundled inside the image
     #     itself (a real user hit this first, pinning to plain 0.4.21).
     #     Verified by downloading and inspecting the actual PyPI wheel
-    #     source for each 0.4.x/0.5.x release: fixed starting at 0.5.7,
-    #     which is also the earliest version confirmed (same method)
-    #     to still serve the v1 API routes above.
+    #     source for each 0.4.x/0.5.x release: fixed starting at 0.5.7.
     image: ghcr.io/chroma-core/chroma:0.5.7
     container_name: restaurant_ai_chromadb
     environment:

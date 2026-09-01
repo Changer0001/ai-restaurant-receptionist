@@ -19,9 +19,35 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import chromadb
+from chromadb.api.configuration import (
+    CollectionConfigurationInternal,
+    ConfigurationParameter,
+    HNSWConfigurationInternal,
+)
 from chromadb.config import Settings as ChromaSettings
 
 from app.core.config import settings
+
+# Built from the *Internal config classes directly, not chromadb's own
+# public CollectionConfiguration/HNSWConfiguration convenience wrappers
+# (chromadb.api.configuration) — those wrappers are real in 0.5.7, but
+# their to_json() stamps the wrapper subclass's own name
+# ("HNSWConfigurationInterface") as the payload's "_type" field, while
+# the corresponding from_json() (called both by a local/embedded client
+# and, going by shared code in chromadb/types.py, the server too) checks
+# for the *Internal name and raises ValueError on the mismatch —
+# reproduced directly against a local EphemeralClient. Building the
+# *Internal classes ourselves sidesteps the bug entirely: verified this
+# same construction round-trips successfully and actually persists
+# "space": "cosine" in the collection's real configuration_json.
+_COSINE_HNSW_CONFIG = CollectionConfigurationInternal(
+    parameters=[
+        ConfigurationParameter(
+            name="hnsw_configuration",
+            value=HNSWConfigurationInternal(parameters=[ConfigurationParameter(name="space", value="cosine")]),
+        )
+    ]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +94,16 @@ class VectorDB:
             # Cosine distance is bounded to [0, 2] with a clean similarity
             # conversion (similarity = 1 - distance), and is the standard
             # metric for normalized text embeddings.
+            #
+            # Both `configuration` and `metadata` request cosine — only
+            # `configuration` is what the server actually honors for the
+            # real HNSW index metric (this client version's `metadata`
+            # dict is stored as given but never derives the index config
+            # from it — see the chromadb pin's own comment in
+            # pyproject.toml). `metadata` is kept alongside it anyway:
+            # harmless, and it's what shows up reading the collection
+            # back via the API for a human checking its config.
+            configuration=_COSINE_HNSW_CONFIG,
             metadata={"hnsw:space": "cosine"},
         )
 

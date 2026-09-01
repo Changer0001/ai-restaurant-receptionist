@@ -72,7 +72,30 @@ dependencies = [
     "numpy==1.26.3",
 
     # Vector DB
-    "chromadb==0.4.21",
+    # Matches the pinned server image (docker-compose.yml's chromadb
+    # service) exactly — was 0.4.21 for a while, kept deliberately
+    # behind the 0.5.7 server because that pairing still worked over
+    # the wire (0.5.7 kept serving the v1 API routes 0.4.21 calls).
+    # That masked a real, separate incompatibility: this client's
+    # create_collection request has no `configuration` field at all
+    # (only `metadata`), and a 0.5.7 *server* receiving that legacy
+    # shape defaults the collection's actual HNSW distance metric to
+    # "l2" regardless of the `hnsw:space: cosine` in the given
+    # `metadata` (the server records that metadata dict as given, but
+    # doesn't derive the real index config from it — a chromadb
+    # server-side gap, not something fixable from client code). Since
+    # every real similarity score this app ever gets back is computed
+    # from that metric, every RAG query against a collection created
+    # under the mismatched pair scored as irrelevant — hit live, where
+    # even an unambiguous match ("where are you located?" against a
+    # document titled "Location & Parking") returned zero results.
+    # Matching the client to the server outright removes the mismatch
+    # instead of working around it — verified this doesn't newly
+    # conflict with numpy==1.26.3/torch==2.1.1 above (chromadb 0.5.7
+    # only requires numpy>=1.22.5, no upper bound) and that its
+    # HttpClient/Collection.add()/.query() signatures our own
+    # app/rag/vector_db.py already calls are unchanged.
+    "chromadb==0.5.7",
 
     # TTS
     "kokoro==0.9.4",
