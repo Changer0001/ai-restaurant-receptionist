@@ -39,7 +39,7 @@ from app.providers.llm.base import LLMProvider
 from app.providers.stt.base import STTProvider
 from app.providers.tts.base import TTSProvider
 from app.rag.vector_db import VectorDB
-from app.services import call_service
+from app.services import call_service, caller_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,37 @@ def _split_into_speakable_chunks(text: str) -> list[str]:
     return chunks
 
 
+def _is_prompt_echo(text: str) -> bool:
+    """
+    Whether Whisper transcribed its own vocabulary hint instead of the
+    caller.
+
+    STT_INITIAL_PROMPT is fed to Whisper as preceding context to bias it
+    toward this restaurant's dish names, and Whisper's job is to continue
+    the text it was given — so on short or unclear audio it sometimes
+    continues the prompt rather than transcribing the caller. A real call
+    logged the caller as saying "We serve halal Syrian and Mediterranean
+    food." That went into the transcript, the conversation history, and
+    the LLM's view of what the caller wanted.
+
+    Detected by word overlap rather than an exact match, since the echo
+    comes back reworded and repunctuated.
+    """
+    prompt_words = {word.strip(",.").lower() for word in settings.STT_INITIAL_PROMPT.split()}
+    if not prompt_words:
+        return False
+
+    spoken = [word.strip(",.!?").lower() for word in text.split() if word.strip(",.!?")]
+    if not spoken:
+        return False
+
+    # A caller can legitimately say two or three of these words in a row
+    # ("do you have chicken shawarma") — what marks an echo is an
+    # utterance made almost entirely of them.
+    overlap = sum(1 for word in spoken if word in prompt_words) / len(spoken)
+    return overlap >= 0.8 and len(spoken) >= 4
+
+
 def _has_speech(text: str) -> bool:
     """
     Whether a transcript contains anything a caller actually said.
@@ -129,6 +160,9 @@ class CallSession:
 
         self.engine = ConversationEngine(llm, embedder, vector_db, db, restaurant)
         self.context = ConversationContext(restaurant_id=restaurant.id)
+        # Populated in start() from past calls and reservations for
+        # this caller's number; empty for an unrecognized caller.
+        self.caller_profile = caller_service.CallerProfile()
         self.turn_detector = TurnDetector()
 
         self.final_outcome = CallOutcomeEnum.UNKNOWN
@@ -144,9 +178,29 @@ class CallSession:
         active_calls.inc()
         self._counted_active = True
 
-        greeting = self.restaurant.ai_greeting or (
+        default_greeting = self.restaurant.ai_greeting or (
             f"Thank you for calling {self.restaurant.name}. How can I help you today?"
         )
+        # Recognizing a regular is the cheapest warmth available on a
+        # phone line, and the data is already in the database. Wrapped
+        # in try/except deliberately: a caller-memory lookup failing
+        # must never stop a call from being answered — the worst
+        # acceptable outcome is a caller who isn't greeted by name.
+        try:
+            self.caller_profile = await caller_service.get_caller_profile(
+                self.db, self.restaurant.id, self.call.caller_number
+            )
+            greeting = caller_service.greeting_for(
+                self.caller_profile, self.restaurant.name, default_greeting
+            )
+            self.context.caller_name = self.caller_profile.name
+            if self.caller_profile.upcoming_reservation is not None:
+                self.context.known_reservation = caller_service.describe_reservation(
+                    self.caller_profile.upcoming_reservation
+                )
+        except Exception as e:
+            logger.warning(f"Caller lookup failed, greeting as a new caller: {e}")
+            greeting = default_greeting
         # Both records matter here: the DB transcript is the persisted
         # call record; context.history is what the engine's own prompts
         # (intent classification, escalation review) actually read —
@@ -190,6 +244,10 @@ class CallSession:
         logger.warning(f"DEBUG STT transcript: text={text!r} confidence={confidence!r}")
         if not _has_speech(text):
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
+
+        if _is_prompt_echo(text):
+            logger.warning(f"Discarding STT echo of the vocabulary prompt: {text!r}")
+            return
 
         await call_service.append_transcript_turn(self.db, self.call, "caller", text, confidence)
 

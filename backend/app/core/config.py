@@ -126,12 +126,20 @@ class Settings(BaseSettings):
     # Keep it to a plausible sentence or a comma-separated list of terms;
     # Whisper treats it as preceding context, not as a command. Override
     # per deployment in .env with the restaurant's own menu vocabulary.
+    # Deliberately a bare term list, NOT a fluent sentence. An earlier
+    # version opened "Thanks for calling. We serve halal Syrian and
+    # Mediterranean food: ..." and Whisper echoed that sentence back as
+    # a transcript of what the *caller* had just said — the model
+    # continues the prompt it was given, and a fluent sentence is
+    # something it can plausibly continue. A comma-separated list of
+    # nouns still biases the vocabulary without offering a sentence to
+    # complete. Anything it does echo is caught by
+    # app/voice/session.py's echo guard.
     STT_INITIAL_PROMPT: str = (
-        "Thanks for calling. We serve halal Syrian and Mediterranean food: "
         "shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, "
         "kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, "
         "manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, "
-        "gluten free, takeout, delivery, catering, reservation, parking."
+        "gluten free, takeout, delivery, catering, reservation, parking"
     )
 
     # ========================================================================

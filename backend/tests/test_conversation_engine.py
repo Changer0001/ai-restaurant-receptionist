@@ -450,3 +450,58 @@ async def test_unclear_count_resets_after_successful_intent(db_session, vector_d
     result = await engine.handle_turn(context, "asdkjf")
     assert context.unclear_count == 1
     assert result.should_transfer is False  # only one UNCLEAR since the reset
+
+
+async def test_asking_about_an_existing_booking_does_not_start_a_new_one(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    A real caller booked a table and, a few turns later, asked "can you
+    remind me my reservation?" — and was walked through booking from
+    scratch again: name, phone number, party size, all for a table they
+    already had.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), "SHOULD NOT BE CALLED"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(
+        restaurant_id=restaurant.id,
+        known_reservation="I have you down for 5 people on Friday, September 4 at 7 PM, under Mike.",
+    )
+
+    result = await engine.handle_turn(context, "Can you remind me my reservation?")
+
+    assert "5 people" in result.response_text
+    assert "Mike" in result.response_text
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert not any("Extract reservation details" in call for call in llm.calls)
+
+
+async def test_booking_a_new_table_still_works_for_a_caller_who_already_has_one(
+    db_session, vector_db, embedding_provider, restaurant, monkeypatch
+):
+    """The recall path must not swallow a genuine new booking request."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_RESERVATION_COLLECTION", False)
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(
+        restaurant_id=restaurant.id,
+        known_reservation="I have you down for 5 people on Friday, September 4 at 7 PM, under Mike.",
+    )
+
+    result = await engine.handle_turn(context, "I'd like to book a table for tomorrow at six")
+
+    assert "5 people" not in result.response_text
+    assert context.state == ConversationState.CONFIRM_TRANSFER

@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.conversation import hours_answer, smalltalk
 from app.conversation.escalation import should_escalate
 from app.conversation.intent import classify_intent
-from app.conversation.rag_answer import generate_faq_answer
+from app.conversation.rag_answer import build_retrieval_query, generate_faq_answer
 from app.conversation.reservation_extraction import extract_reservation_fields
 from app.conversation.state import ConversationContext, ConversationState, ReservationDraft
 from app.conversation.tools import create_reservation_request
@@ -69,6 +69,32 @@ _OFFER_TRANSFER_PROMPTS = {
     "repeated_unclear": "I'm having a hard time understanding — would you like me to connect you with a team member instead?",
     "unknown_answer": "I don't have that one in front of me, I'm afraid. Would you like me to connect you with someone at the restaurant who can tell you?",
 }
+
+
+# Phrasings that ask about a booking the caller already has, rather than
+# asking to make a new one. Kept as literal phrases rather than another
+# LLM call: this only ever runs when the caller is already known to have
+# an upcoming reservation, so the question it disambiguates is narrow.
+_EXISTING_RESERVATION_PHRASES = (
+    "remind me",
+    "already booked",
+    "already made",
+    "already have",
+    "my reservation",
+    "my booking",
+    "my table",
+    "confirm my",
+    "check my",
+    "did i book",
+    "do i have",
+    "what time is my",
+    "you should have",
+)
+
+
+def _asks_about_existing_reservation(message: str) -> bool:
+    lowered = message.lower()
+    return any(phrase in lowered for phrase in _EXISTING_RESERVATION_PHRASES)
 
 
 @dataclass
@@ -166,19 +192,7 @@ class ConversationEngine:
 
         if intent == "RESERVATION":
             context.unclear_count = 0
-            if not settings.FEATURE_RESERVATION_COLLECTION:
-                # Some restaurants have no booking system of their own to
-                # write a collected reservation into (e.g. paper-only) —
-                # offering a human handoff instead of the AI collecting
-                # details is the more honest MVP behavior there. A
-                # restaurant that DOES want the AI to collect and create
-                # a real pending Reservation row turns this back on.
-                return self._offer_transfer(context, "reservation_request")
-            context.state = ConversationState.RESERVATION_COLLECTING
-            context.reservation_draft = await extract_reservation_fields(
-                self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
-            )
-            return self._advance_reservation_collection(context)
+            return await self._handle_reservation_intent(context, message)
 
         if intent == "FAQ":
             context.unclear_count = 0
@@ -189,6 +203,32 @@ class ConversationEngine:
         if context.unclear_count >= _MAX_UNCLEAR_BEFORE_ESCALATION:
             return self._offer_transfer(context, "repeated_unclear")
         return self._say(context, "I'm sorry, could you tell me a bit more about what you need?")
+
+    async def _handle_reservation_intent(
+        self, context: ConversationContext, message: str
+    ) -> TurnResult:
+        # Asking about a booking they already have is not a request to
+        # make another one. A real caller asked "can you remind me my
+        # reservation?" and was walked through booking from scratch —
+        # name, phone number, party size — for a table they had booked
+        # minutes earlier on the same call.
+        if context.known_reservation and _asks_about_existing_reservation(message):
+            return self._say(context, context.known_reservation)
+
+        if not settings.FEATURE_RESERVATION_COLLECTION:
+            # Some restaurants have no booking system of their own to
+            # write a collected reservation into (e.g. paper-only) —
+            # offering a human handoff instead of the AI collecting
+            # details is the more honest MVP behavior there. A restaurant
+            # that DOES want the AI to collect and create a real pending
+            # Reservation row turns this back on.
+            return self._offer_transfer(context, "reservation_request")
+
+        context.state = ConversationState.RESERVATION_COLLECTING
+        context.reservation_draft = await extract_reservation_fields(
+            self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
+        )
+        return self._advance_reservation_collection(context)
 
     async def _handle_faq(self, context: ConversationContext, message: str) -> TurnResult:
         if hours_answer.looks_like_hours_question(message):
@@ -207,7 +247,20 @@ class ConversationEngine:
             return self._say(context, answer)
 
         answer, grounded = await generate_faq_answer(
-            self.llm, self.embedder, self.vector_db, self.restaurant.id, self.restaurant.name, message
+            self.llm,
+            self.embedder,
+            self.vector_db,
+            self.restaurant.id,
+            self.restaurant.name,
+            message,
+            # Follow-ups ("what are they?", "does it come with a side?")
+            # have to be searched together with the turn that gave them
+            # their subject — see build_retrieval_query.
+            search_query=build_retrieval_query(context.history, message),
+            # The answer also needs the exchange, not just the right
+            # chunks: "what are they?" has to be answered about
+            # whatever was being discussed a moment ago.
+            conversation_context=context.history_text(max_turns=6),
         )
         # An ungrounded answer offers to connect the caller with someone —
         # so actually make that offer, rather than saying the words and

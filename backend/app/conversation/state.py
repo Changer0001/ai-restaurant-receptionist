@@ -94,6 +94,20 @@ class ConversationContext:
     transfer_reason: Optional[str] = None
     unclear_count: int = 0
 
+    # What the restaurant already knows about this caller, looked up from
+    # past calls and reservations by the number they're calling from (see
+    # app/services/caller_service.py). Both stay None for an unrecognized
+    # caller, and the conversation then runs exactly as it would without
+    # any of this.
+    #
+    # The reservation is carried as a finished spoken sentence rather
+    # than an ORM row: what a caller hears read back about their own
+    # booking has to be exactly right, so it's rendered once from real
+    # data instead of being re-described by a model every time it's
+    # mentioned.
+    caller_name: Optional[str] = None
+    known_reservation: Optional[str] = None
+
     def add_turn(self, role: str, content: str) -> None:
         self.history.append(Turn(role=role, content=content))
 

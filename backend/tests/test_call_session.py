@@ -16,7 +16,7 @@ import numpy as np
 from app.conversation.state import ConversationState
 from app.db.models import CallOutcomeEnum
 from app.services import call_service
-from app.voice.session import CallSession, _split_into_speakable_chunks
+from app.voice.session import CallSession, _is_prompt_echo, _split_into_speakable_chunks
 from tests.fakes import FakeTTSProvider, ScriptedLLMProvider, ScriptedSTTProvider, contains
 
 
@@ -322,3 +322,33 @@ def test_single_sentence_is_one_chunk():
     assert _split_into_speakable_chunks("We're at 388 East Main Street in El Cajon.") == [
         "We're at 388 East Main Street in El Cajon."
     ]
+
+
+# ----------------------------------------------------------------------
+# Whisper echoing its own vocabulary hint
+#
+# STT_INITIAL_PROMPT is fed to Whisper as preceding context to bias it
+# toward the restaurant's dish names. Whisper's job is to continue the
+# text it is given, so on unclear audio it sometimes continues the
+# prompt instead of transcribing the caller — a real call logged the
+# caller as saying "We serve halal Syrian and Mediterranean food."
+# ----------------------------------------------------------------------
+
+
+def test_prompt_echo_is_detected():
+    from app.core.config import settings
+
+    assert _is_prompt_echo("shawarma, kibbeh, falafel, hummus, tahina")
+    # The echo comes back reworded and repunctuated, not character-exact.
+    assert _is_prompt_echo(" ".join(settings.STT_INITIAL_PROMPT.split()[:8]))
+
+
+def test_a_caller_using_menu_words_is_not_mistaken_for_an_echo():
+    """
+    Callers say these words — that's the whole reason they're in the
+    hint. Only an utterance made almost entirely of them is an echo.
+    """
+    assert not _is_prompt_echo("Do you have chicken shawarma?")
+    assert not _is_prompt_echo("Is the falafel vegan?")
+    assert not _is_prompt_echo("How much is the hummus and the mixed grill?")
+    assert not _is_prompt_echo("shawarma")
