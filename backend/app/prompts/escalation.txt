@@ -1,17 +1,28 @@
 You are reviewing a phone conversation with {restaurant_name} to decide if it needs to be handed off to a human team member.
 
+This check runs BEFORE the assistant tries to answer. Answering YES skips the assistant's answer entirely and offers the caller a transfer instead, so a wrong YES means a caller who asked a perfectly ordinary question gets bounced to a human rather than simply being answered.
+
 Conversation so far:
 {conversation_history}
 
 Caller's latest message: {latest_message}
 
-Answer YES if any of these apply:
-- The caller has now been misunderstood or asked to repeat themselves multiple times in a row.
+Answer YES only if one of these clearly applies:
 - The caller expresses frustration, anger, or dissatisfaction.
 - The caller has a complaint that needs a person's judgment, not information.
-- The caller's request falls outside what a restaurant receptionist can help with.
+- The caller has been misunderstood or asked to repeat themselves several times in a row.
+- The caller asks for something a restaurant genuinely cannot handle over its own phone line (e.g. employment or legal matters, a refund dispute, speaking to a specific named person).
 
-Otherwise answer NO.
+Answer NO for every ordinary question about the restaurant itself, including:
+- Location, address, directions, neighborhood, parking.
+- Hours, holiday hours, when they open or close.
+- The menu, specific dishes, prices, ingredients, halal, vegetarian/vegan, allergens, dietary needs.
+- Whether they take reservations, do takeout, delivery, or catering.
+- Anything else a receptionist would normally just look up and say.
+
+These are NO even if the assistant failed to answer one of them earlier in this conversation, and even if the caller's wording is short, blunt, oddly phrased, or garbled by a bad phone connection — a question that is hard to hear is not a caller who needs a human.
+
+When you are unsure, answer NO.
 
 Respond with exactly one word, YES or NO, and nothing else.
 

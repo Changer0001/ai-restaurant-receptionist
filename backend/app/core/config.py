@@ -210,7 +210,26 @@ class Settings(BaseSettings):
     RAG_CHUNK_SIZE: int = 500
     RAG_CHUNK_OVERLAP: int = 50
     RAG_RETRIEVAL_TOP_K: int = 5
-    RAG_RELEVANCE_THRESHOLD: float = 0.6
+    # Was 0.6, which was a guess made before any real embeddings existed
+    # to measure against. Calibrated against actual cosine similarities
+    # from live calls (nomic-embed-text, real seeded restaurant
+    # documents, real Whisper transcripts of real callers):
+    #
+    #   "...a lot of items in our menu?"    -> menu/dietary doc  0.627
+    #   "Can you tell me ... our location?" -> location doc      0.485
+    #   (same queries against the *other*, unrelated documents:
+    #    0.472, 0.481, 0.432, 0.362)
+    #
+    # The right document ranked first every time, but a genuine,
+    # unambiguous match only reached 0.485 — so 0.6 rejected correct
+    # answers ("where are you located?" against a document literally
+    # titled "Location & Parking" returned nothing). Short conversational
+    # queries against short reference documents just don't score high in
+    # absolute terms with this embedding model; what matters is the gap
+    # between a real match and an unrelated one, which sits right around
+    # 0.45 here. Raise this if callers start getting answers grounded in
+    # loosely-related documents; lower it if real questions go unanswered.
+    RAG_RELEVANCE_THRESHOLD: float = 0.45
     # Knowledge documents are restaurant reference text (menus, policies,
     # FAQs) — 2MB is generous headroom over that while still bounding
     # worst-case chunking/embedding work per upload.
