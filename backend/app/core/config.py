@@ -92,6 +92,18 @@ class Settings(BaseSettings):
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_REQUEST_TIMEOUT: int = 30
 
+    # Model for the two classification calls each turn (is this caller
+    # upset? what do they want?). Both answer with a single word from a
+    # fixed list, which is not work that needs the large model — and
+    # they sit directly in the caller's silence, two of the three LLM
+    # round trips in a turn. The smaller model is meaningfully faster at
+    # them. Set this to the same value as GROQ_MODEL if classification
+    # accuracy ever looks worse than the latency is worth.
+    #
+    # Only the phrasing of actual answers still goes to GROQ_MODEL,
+    # where quality is what the caller hears.
+    GROQ_CLASSIFIER_MODEL: str = "openai/gpt-oss-20b"
+
     # Separate embedding model — embedding models are purpose-built and
     # much smaller than chat models; using OLLAMA_MODEL for both would
     # waste VRAM and give worse embeddings than a dedicated model.
@@ -114,6 +126,22 @@ class Settings(BaseSettings):
     # real calls `base` produced "hollow options" for "halal options"
     # and "chicken show, Emma" for "chicken shawarma".
     WHISPER_COMPUTE_TYPE: str = ""
+
+    # Beam width for decoding. faster-whisper defaults to 5; 1 is greedy.
+    #
+    # Measured on real calls, transcription cost barely moves with how
+    # long the caller spoke (0.78s of audio took 2.95s, 5.88s took 3.5s)
+    # — the encoder runs over a fixed 30-second window either way, so the
+    # only parts that scale are the model and the decode. Greedy decoding
+    # gives back a large slice of the decode for a small accuracy cost on
+    # the short, plain utterances a phone line actually gets. Raise it
+    # back toward 5 if transcripts get noticeably worse.
+    WHISPER_BEAM_SIZE: int = 1
+
+    # CPU threads for inference. 0 lets CTranslate2 choose, which is
+    # usually the physical core count — set it explicitly if that guess
+    # is wrong for this machine.
+    WHISPER_CPU_THREADS: int = 0
 
     # Vocabulary hint passed to Whisper as its decoder prefix. Whisper
     # biases toward spellings it has just "seen", so listing the words a
@@ -155,6 +183,12 @@ class Settings(BaseSettings):
     # "default voice per language," every synthesis call must name one.
     # af_heart is Kokoro's commonly-documented American English voice.
     KOKORO_VOICE: str = "af_heart"
+    # Speaking rate. Synthesis time scales with how much audio is
+    # produced, so this shortens both the wait AND the playback — a
+    # measured 10-second synthesis for one long answer comes down
+    # noticeably at 1.15. Past ~1.25 it starts to sound hurried, which
+    # costs more in warmth than it saves in seconds.
+    KOKORO_SPEED: float = 1.15
     PIPER_VOICE_MODEL_PATH: str = "/models/piper/en_US-lessac-medium.onnx"
 
     # ========================================================================

@@ -22,7 +22,7 @@ import base64
 import logging
 import re
 import time
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Optional
 
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,6 +151,7 @@ class CallSession:
         embedder: EmbeddingProvider,
         vector_db: VectorDB,
         send_audio: SendAudio,
+        classifier_llm: Optional[LLMProvider] = None,
     ):
         self.db = db
         self.call = call
@@ -159,7 +160,9 @@ class CallSession:
         self.tts = tts
         self.send_audio = send_audio
 
-        self.engine = ConversationEngine(llm, embedder, vector_db, db, restaurant)
+        self.engine = ConversationEngine(
+            llm, embedder, vector_db, db, restaurant, classifier_llm=classifier_llm
+        )
         self.context = ConversationContext(restaurant_id=restaurant.id)
         # Populated in start() from past calls and reservations for
         # this caller's number; empty for an unrecognized caller.

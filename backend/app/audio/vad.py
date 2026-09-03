@@ -29,7 +29,13 @@ class TurnDetectorConfig:
     energy_threshold: float = 400.0
     # How much continuous silence (ms) after speech has been heard
     # before the utterance is considered complete.
-    silence_hangover_ms: int = 700
+    #
+    # This is dead time on every single turn, before any work starts.
+    # 500ms still clears the natural pauses inside a sentence on a phone
+    # line while taking a fifth of a second off each exchange. Push it
+    # lower and the detector starts cutting people off mid-sentence,
+    # which costs far more than it saves.
+    silence_hangover_ms: int = 500
     # Safety cap: transcribe even without silence after this much
     # continuous speech, so a caller who never pauses doesn't leave the
     # engine waiting forever.

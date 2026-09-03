@@ -32,6 +32,8 @@ class FasterWhisperSTTProvider(STTProvider):
         device: str = settings.WHISPER_DEVICE,
         compute_type: str = settings.WHISPER_COMPUTE_TYPE,
         initial_prompt: str = settings.STT_INITIAL_PROMPT,
+        beam_size: int = settings.WHISPER_BEAM_SIZE,
+        cpu_threads: int = settings.WHISPER_CPU_THREADS,
     ):
         """
         Initialize Faster-Whisper provider.
@@ -43,11 +45,15 @@ class FasterWhisperSTTProvider(STTProvider):
                 picks by device — see WHISPER_COMPUTE_TYPE in config.
             initial_prompt: Vocabulary hint biasing the decoder toward
                 this restaurant's dish names — see STT_INITIAL_PROMPT.
+            beam_size: Decode beam width; 1 is greedy and much faster.
+            cpu_threads: 0 lets CTranslate2 pick.
         """
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.initial_prompt = initial_prompt
+        self.beam_size = beam_size
+        self.cpu_threads = cpu_threads
         self.model: WhisperModel | None = None
 
     async def _load_model(self) -> WhisperModel:
@@ -67,6 +73,7 @@ class FasterWhisperSTTProvider(STTProvider):
                 self.model_size,
                 device=self.device,
                 compute_type=compute_type,
+                cpu_threads=self.cpu_threads,
             )
         return self.model
 
@@ -108,6 +115,13 @@ class FasterWhisperSTTProvider(STTProvider):
                 # then went through the whole intent/escalation pipeline
                 # as if the caller had said something.
                 vad_filter=True,
+                # Greedy by default — see WHISPER_BEAM_SIZE. On a phone
+                # call the decode is a real share of a turn the caller
+                # spends in silence.
+                beam_size=self.beam_size,
+                # Nothing downstream uses per-word timing, and asking for
+                # it makes the decoder do extra work on every utterance.
+                without_timestamps=True,
             )
 
             text_parts = []

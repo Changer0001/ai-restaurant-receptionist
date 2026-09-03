@@ -26,7 +26,7 @@ from app.core.metrics import twilio_signature_failures_total
 from app.db.session import get_db_session
 from app.providers.embedding import get_embedding_provider
 from app.providers.embedding.base import EmbeddingProvider
-from app.providers.llm import get_llm_provider
+from app.providers.llm import get_classifier_llm_provider, get_llm_provider
 from app.providers.llm.base import LLMProvider
 from app.providers.stt import get_stt_provider
 from app.providers.stt.base import STTProvider
@@ -248,6 +248,7 @@ async def media_stream(
     call_sid: str,
     db: AsyncSession = Depends(get_db_session),
     llm: LLMProvider = Depends(get_llm_provider),
+    classifier_llm: LLMProvider = Depends(get_classifier_llm_provider),
     stt: STTProvider = Depends(get_stt_provider),
     tts: TTSProvider = Depends(get_tts_provider),
     embedder: EmbeddingProvider = Depends(get_embedding_provider),
@@ -291,7 +292,9 @@ async def media_stream(
             }
         )
 
-    session = CallSession(db, call, restaurant, stt, tts, llm, embedder, vector_db, send_audio)
+    session = CallSession(
+        db, call, restaurant, stt, tts, llm, embedder, vector_db, send_audio, classifier_llm
+    )
 
     try:
         while True:

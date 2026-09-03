@@ -21,7 +21,7 @@ from app.audio.codec import pcm16_to_mulaw
 from app.db.models import Call, CallOutcomeEnum, RestaurantPhoneNumber
 from app.main import app
 from app.providers.embedding import get_embedding_provider
-from app.providers.llm import get_llm_provider
+from app.providers.llm import get_classifier_llm_provider, get_llm_provider
 from app.providers.stt import get_stt_provider
 from app.providers.tts import get_tts_provider
 from app.rag.vector_db import get_vector_db
@@ -67,6 +67,9 @@ async def _create_call_via_voice_webhook(client, db_session, restaurant) -> str:
 
 def _override_ai_providers(llm, stt, tts, embedding_provider, vector_db):
     app.dependency_overrides[get_llm_provider] = lambda: llm
+    # The engine classifies with its own provider, which defaults to a
+    # real one — without this the test reaches for a live LLM.
+    app.dependency_overrides[get_classifier_llm_provider] = lambda: llm
     app.dependency_overrides[get_stt_provider] = lambda: stt
     app.dependency_overrides[get_tts_provider] = lambda: tts
     app.dependency_overrides[get_embedding_provider] = lambda: embedding_provider

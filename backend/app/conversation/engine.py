@@ -204,12 +204,18 @@ class ConversationEngine:
         vector_db: VectorDB,
         db: AsyncSession,
         restaurant: Restaurant,
+        classifier_llm: Optional[LLMProvider] = None,
     ):
         self.llm = llm
         self.embedder = embedder
         self.vector_db = vector_db
         self.db = db
         self.restaurant = restaurant
+        # The escalation and intent calls answer with a single word from
+        # a fixed list, so they can use a smaller, faster model than the
+        # one that phrases what the caller actually hears. Defaults to
+        # the same provider, so nothing changes unless one is supplied.
+        self.classifier_llm = classifier_llm or llm
 
     def _now(self) -> datetime:
         return datetime.now(ZoneInfo(self.restaurant.timezone))
@@ -253,8 +259,8 @@ class ConversationEngine:
         # which is the deliberate trade: one wasted classification call
         # on the rare turn, against a faster reply on every other turn.
         escalate, intent = await asyncio.gather(
-            should_escalate(self.llm, self.restaurant.name, context, message),
-            classify_intent(self.llm, self.restaurant.name, context, message),
+            should_escalate(self.classifier_llm, self.restaurant.name, context, message),
+            classify_intent(self.classifier_llm, self.restaurant.name, context, message),
         )
 
         if escalate:

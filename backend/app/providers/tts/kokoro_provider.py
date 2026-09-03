@@ -38,8 +38,10 @@ class KokoroTTSProvider(TTSProvider):
         voice: str = settings.KOKORO_VOICE,
         lang_code: str = settings.KOKORO_LANG_CODE,
         device: str = settings.KOKORO_DEVICE,
+        speed: float = settings.KOKORO_SPEED,
     ):
         self.voice = voice
+        self.speed = speed
         self.lang_code = lang_code
         # KPipeline's device param wants 'cuda'/'cpu'/None (auto-detect);
         # this project's KOKORO_DEVICE setting uses 'cuda'/'cpu' directly.
@@ -63,7 +65,7 @@ class KokoroTTSProvider(TTSProvider):
     def _synthesize_sync(self, text: str) -> np.ndarray:
         pipeline = self._load_pipeline()
         chunks = []
-        for result in pipeline(text, voice=self.voice, speed=1.0):
+        for result in pipeline(text, voice=self.voice, speed=self.speed):
             if result.audio is not None:
                 chunks.append(result.audio.detach().cpu().numpy())
 
