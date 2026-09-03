@@ -136,9 +136,29 @@ else
   PHONE_SID="$(echo "$PHONE_LOOKUP_RESPONSE" | grep -o '"sid":"[^"]*"' | head -1 | sed 's/"sid":"//;s/"$//' || true)"
 
   if [ -z "$PHONE_SID" ]; then
-    echo "    Could not find $TWILIO_NUMBER on this Twilio account — update the webhook manually:"
+    echo "    Could not find $TWILIO_NUMBER on this Twilio account."
+    # An exact-match lookup returning nothing says only "not this
+    # number", which leaves you guessing whether the number is on a
+    # different account, or just stored in a different format. Listing
+    # what IS on the account answers that in one line, and gives you the
+    # value to re-run with: ./scripts/full-restart.sh +1XXXXXXXXXX
+    ALL_NUMBERS="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+      "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PageSize=20" \
+      | grep -o '"phone_number": *"[^"]*"' | sed 's/.*: *"//;s/"$//' || true)"
+
+    if [ -n "$ALL_NUMBERS" ]; then
+      echo "    Numbers on this account:"
+      echo "$ALL_NUMBERS" | sed 's/^/      /'
+      echo "    Re-run with the right one to save it: ./scripts/full-restart.sh +1XXXXXXXXXX"
+    else
+      echo "    This account has no phone numbers on it at all — check"
+      echo "    TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in backend/.env."
+    fi
+
+    echo ""
+    echo "    Meanwhile, paste this into Twilio Console -> Phone Numbers ->"
+    echo "    your number -> Voice Configuration -> 'A call comes in':"
     echo "    $VOICE_WEBHOOK_URL"
-    echo "    Twilio's lookup response was: $PHONE_LOOKUP_RESPONSE"
   else
     curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" -X POST \
       "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
