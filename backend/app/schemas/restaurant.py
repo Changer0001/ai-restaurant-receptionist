@@ -32,7 +32,19 @@ class RestaurantRead(BaseModel):
 
 
 class RestaurantUpdate(BaseModel):
-    """All fields optional — PATCH semantics, only provided fields change."""
+    """
+    All fields optional — PATCH semantics, only provided fields change.
+
+    A field this model doesn't know is a 422, not a shrug. Pydantic's
+    default is to drop unknown keys, which means a client PATCHing a
+    field the running server is too old to have gets a clean 200 back
+    for a request that stored nothing. That cost a real debugging round:
+    a seeding script reported "OK" for a vocabulary the backend had
+    silently discarded, and the wrong-sounding call that followed looked
+    like a speech-recognition problem instead of a deploy problem.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     description: Optional[str] = None

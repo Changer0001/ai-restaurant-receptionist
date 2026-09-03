@@ -270,19 +270,40 @@ upload() {
 STT_VOCABULARY="shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, gluten free, takeout, delivery, catering, reservation, parking"
 
 echo "==> Setting the speech-recognition vocabulary..."
-VOCAB_STATUS="$(python3 -c "
+VOCAB_RESPONSE="$(python3 -c "
 import json, sys
 print(json.dumps({'stt_vocabulary': sys.argv[1]}))
-" "$STT_VOCABULARY" | curl -sS -o /dev/null -w '%{http_code}' \
+" "$STT_VOCABULARY" | curl -sS \
   -X PATCH "$API_BASE/restaurants/$RESTAURANT_ID" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data-binary @-)"
-if [ "$VOCAB_STATUS" = "200" ]; then
+
+# Checked by reading the value back out of the response, NOT by trusting
+# the status code. A backend running code older than the stt_vocabulary
+# field drops the unknown key and still answers 200 — so a status-only
+# check reports success on a request that stored nothing, which is
+# exactly the "it said OK but nothing happened" failure this script
+# exists to avoid.
+VOCAB_STORED="$(python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('stt_vocabulary') or '')
+except Exception:
+    print('')
+" <<< "$VOCAB_RESPONSE" || true)"
+
+if [ "$VOCAB_STORED" = "$STT_VOCABULARY" ]; then
   echo "    OK"
 else
-  echo "    FAILED (HTTP $VOCAB_STATUS) — documents below still upload; speech"
-  echo "    recognition just falls back to the deployment-wide default."
+  echo "    NOT SET. The documents below still upload, but speech recognition" >&2
+  echo "    falls back to the generic default, so this menu's dish names will" >&2
+  echo "    be transcribed worse. Two usual causes:" >&2
+  echo "      1. The migration hasn't run:" >&2
+  echo "           cd backend && source venv/bin/activate && alembic upgrade head" >&2
+  echo "      2. The backend is still running pre-stt_vocabulary code — restart" >&2
+  echo "         it after pulling, or it silently ignores the field." >&2
+  echo "    Server said: $VOCAB_RESPONSE" >&2
 fi
 
 upload "$TMP_DIR/location.txt" "Location & Address" "policy"

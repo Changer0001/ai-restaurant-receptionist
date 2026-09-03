@@ -83,6 +83,26 @@ def test_onboarding_settings_are_configurable_over_the_api(client, register_payl
     assert body["takes_reservations"] is False
 
 
+def test_an_unknown_field_is_rejected_rather_than_silently_dropped(client, register_payload):
+    """
+    Pydantic's default is to ignore unknown keys, so a client PATCHing a
+    field the running server is too old to have would get a clean 200
+    for a request that stored nothing. That happened for real: a seeding
+    script reported "OK" for a vocabulary the backend had discarded, and
+    the bad-sounding call afterwards looked like a speech-recognition
+    problem rather than a server that hadn't been restarted.
+    """
+    tokens = client.post("/api/auth/register", json=register_payload).json()
+    me = client.get("/api/auth/me", headers=auth_headers(tokens["access_token"])).json()
+
+    resp = client.patch(
+        f"/api/restaurants/{me['restaurant_id']}",
+        json={"stt_vocabluary": "typo in the field name"},
+        headers=auth_headers(tokens["access_token"]),
+    )
+    assert resp.status_code == 422
+
+
 def test_cross_tenant_read_is_404_not_403(client, register_payload):
     """
     Restaurant A's owner must not be able to see Restaurant B's data —
