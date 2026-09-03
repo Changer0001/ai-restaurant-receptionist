@@ -53,6 +53,36 @@ def test_owner_can_patch_own_restaurant(client, register_payload):
     assert body["name"] == register_payload["restaurant_name"]
 
 
+def test_onboarding_settings_are_configurable_over_the_api(client, register_payload):
+    """
+    Everything that varies between clients is data reachable over the
+    API. Onboarding a business must not need a code change, so its menu
+    vocabulary and whether it takes bookings are settable here.
+    """
+    tokens = client.post("/api/auth/register", json=register_payload).json()
+    me = client.get("/api/auth/me", headers=auth_headers(tokens["access_token"])).json()
+
+    fresh = client.get(
+        f"/api/restaurants/{me['restaurant_id']}", headers=auth_headers(tokens["access_token"])
+    ).json()
+    # Unset until the restaurant chooses — see Restaurant in app/db/models.py.
+    assert fresh["stt_vocabulary"] is None
+    assert fresh["takes_reservations"] is None
+
+    resp = client.patch(
+        f"/api/restaurants/{me['restaurant_id']}",
+        json={
+            "stt_vocabulary": "carbonara, marinara, bruschetta, arancini",
+            "takes_reservations": False,
+        },
+        headers=auth_headers(tokens["access_token"]),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stt_vocabulary"] == "carbonara, marinara, bruschetta, arancini"
+    assert body["takes_reservations"] is False
+
+
 def test_cross_tenant_read_is_404_not_403(client, register_payload):
     """
     Restaurant A's owner must not be able to see Restaurant B's data —

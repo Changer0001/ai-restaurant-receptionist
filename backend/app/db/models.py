@@ -88,6 +88,23 @@ class Restaurant(BaseModel):
     transfer_number: Mapped[Optional[str]] = mapped_column(String(20))
     menu_url: Mapped[Optional[str]] = mapped_column(String(500))
     ai_greeting: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Dish names and other words this restaurant's callers say that
+    # aren't everyday English, fed to speech recognition as a vocabulary
+    # hint (see STT_INITIAL_PROMPT). Per-restaurant because it MUST be:
+    # a global list of Syrian dish names actively hurts an Italian
+    # restaurant, biasing the recogniser toward "shawarma" when the
+    # caller said "carbonara". Falls back to the global default when
+    # unset, so an unconfigured restaurant is no worse off than before.
+    stt_vocabulary: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Whether the AI collects reservation details itself, or offers to
+    # put the caller through to someone. Nullable on purpose: NULL means
+    # "use the deployment-wide default", so existing restaurants keep
+    # today's behavior and only a restaurant that has actually made the
+    # choice overrides it. Some places have a booking system; some write
+    # in a paper diary and want a human.
+    takes_reservations: Mapped[Optional[bool]] = mapped_column(Boolean)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     # Relationships

@@ -4,7 +4,7 @@ Respond with exactly one of these labels, and nothing else — no punctuation, n
 
 FAQ - a question about the restaurant: hours, location, parking, seating, policies, menu, or similar. This includes asking whether the restaurant is open or what time it opens/closes, even when the question names a future day or time ("tomorrow", "on Sunday", "tonight") — naming a day does not make it a reservation.
 RESERVATION - they explicitly want to book, change, or ask about an actual table reservation for themselves (e.g. "I'd like to book a table", "can I make a reservation for 4").
-ORDER - they are actually placing a food order right now, or asking you to take one ('I'd like to order the mixed grill', 'can I place an order?'). Asking ABOUT a dish is NOT this: questions about portion size, whether something is shareable, what comes with it, or what's in it are FAQ.
+ORDER - they are actually placing a food order right now, or asking you to take one ('I'd like to order the special', 'can I place an order?'). Asking ABOUT a dish is NOT this: questions about portion size, whether something is shareable, what comes with it, or what's in it are FAQ.
 HUMAN - they explicitly ask to be put through to a person, or express frustration with the automated system. A question about who they are speaking to ("what's your name?", "are you a robot?") is NOT this: that asks about you, it does not ask to be transferred to somebody else.
 SMALLTALK - an acknowledgement, thanks, a greeting, a goodbye, or a question about who they're speaking to. There is nothing to look up: "okay", "alright", "got it", "thanks", "that's all", "bye", "what's your name?".
 OUT_OF_SCOPE - something a restaurant's phone line genuinely cannot answer: the weather, traffic or road conditions, news, sports, general knowledge, or anything unrelated to this restaurant.
@@ -44,7 +44,7 @@ Label: OUT_OF_SCOPE
 Caller's latest message: Do you think I can share that with three people?
 Label: FAQ
 
-Caller's latest message: I'd like to order two chicken shawarmas.
+Caller's latest message: I'd like to order two of the chicken plates.
 Label: ORDER
 
 Conversation so far:

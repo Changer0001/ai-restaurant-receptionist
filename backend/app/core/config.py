@@ -143,17 +143,21 @@ class Settings(BaseSettings):
     # is wrong for this machine.
     WHISPER_CPU_THREADS: int = 0
 
-    # Vocabulary hint passed to Whisper as its decoder prefix. Whisper
-    # biases toward spellings it has just "seen", so listing the words a
-    # caller to THIS restaurant is likely to say — dish names, the
-    # restaurant's own name — measurably improves them, at no runtime
-    # cost. This is the single highest-value setting for a menu full of
+    # FALLBACK vocabulary hint passed to Whisper as its decoder prefix.
+    # Whisper biases toward spellings it has just "seen", so listing the
+    # words a caller is likely to say measurably improves them, at no
+    # runtime cost — the single highest-value setting for a menu full of
     # words that aren't in everyday English, and it helps most for the
     # accented speech those words usually arrive in.
     #
-    # Keep it to a plausible sentence or a comma-separated list of terms;
-    # Whisper treats it as preceding context, not as a command. Override
-    # per deployment in .env with the restaurant's own menu vocabulary.
+    # The real setting is per restaurant: Restaurant.stt_vocabulary. It
+    # HAS to be, because one process serves every restaurant and a menu
+    # vocabulary is actively harmful to the wrong one — a list of Syrian
+    # dish names biases the recognizer toward "shawarma" when a caller to
+    # an Italian restaurant said "carbonara". So this default holds only
+    # words every restaurant's callers say, whatever the cuisine, and a
+    # restaurant that has set its own never sees it.
+    #
     # Deliberately a bare term list, NOT a fluent sentence. An earlier
     # version opened "Thanks for calling. We serve halal Syrian and
     # Mediterranean food: ..." and Whisper echoed that sentence back as
@@ -164,10 +168,9 @@ class Settings(BaseSettings):
     # complete. Anything it does echo is caught by
     # app/voice/session.py's echo guard.
     STT_INITIAL_PROMPT: str = (
-        "shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, "
-        "kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, "
-        "manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, "
-        "gluten free, takeout, delivery, catering, reservation, parking"
+        "reservation, table for two, party of four, takeout, pickup, delivery, "
+        "catering, menu, appetizer, entree, dessert, allergy, gluten free, vegan, "
+        "vegetarian, halal, kosher, parking, patio, hours, directions"
     )
 
     # ========================================================================
@@ -363,6 +366,11 @@ class Settings(BaseSettings):
     # its own to write a collected reservation into (paper-only booking,
     # say), where an AI-created Reservation row would just be a database
     # entry nobody ever looks at.
+    #
+    # This is the DEFAULT for restaurants that haven't chosen. A single
+    # restaurant overrides it with Restaurant.takes_reservations, which
+    # is what a mixed deployment needs — one process serving a bookings
+    # restaurant and a walk-ins-only one at the same time.
     FEATURE_RESERVATION_COLLECTION: bool = True
     FEATURE_SMS_NOTIFICATIONS: bool = True
     FEATURE_EMAIL_NOTIFICATIONS: bool = True

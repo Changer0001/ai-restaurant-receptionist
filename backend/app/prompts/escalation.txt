@@ -16,7 +16,7 @@ Answer YES only if one of these clearly applies:
 Answer NO for every ordinary question about the restaurant itself, including:
 - Location, address, directions, neighborhood, parking.
 - Hours, holiday hours, when they open or close.
-- The menu, specific dishes, prices, ingredients, halal, vegetarian/vegan, allergens, dietary needs.
+- The menu, specific dishes, prices, ingredients, allergens, and dietary needs of any kind (vegetarian, vegan, gluten free, halal, kosher).
 - Whether they take reservations, do takeout, delivery, or catering.
 - Anything else a receptionist would normally just look up and say.
 

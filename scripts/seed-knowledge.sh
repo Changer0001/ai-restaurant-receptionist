@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 #
-# Seeds the AI's RAG knowledge base with real restaurant content via the
-# actual /knowledge/upload API — not raw SQL, since this data needs to
-# be chunked and embedded into the vector DB, which only the running app
-# can do (see backend/app/services/knowledge_service.py).
+# Seeds one restaurant's AI receptionist with its own content: the RAG
+# knowledge base (via the actual /knowledge/upload API — not raw SQL,
+# since this data has to be chunked and embedded into the vector DB,
+# which only the running app can do; see backend/app/services/
+# knowledge_service.py) and the speech-recognition vocabulary for its
+# menu.
+#
+# ONBOARDING ANOTHER BUSINESS: copy this file, replace the documents and
+# the STT_VOCABULARY list with theirs, and run it. Everything that varies
+# between clients is data — this script, the RestaurantHours table, and
+# the restaurant's own row. There is no per-client code.
 #
 # Usage:
 #   ./scripts/seed-knowledge.sh                  # replaces previously seeded docs
@@ -248,6 +255,35 @@ upload() {
     echo "    FAILED (HTTP $status): $body"
   fi
 }
+
+# --- Speech-recognition vocabulary ----------------------------------------
+# The words on this menu that aren't everyday English, handed to Whisper
+# as a decoder hint so it spells them right. Stored per restaurant on
+# purpose: one backend serves them all, and a list of Syrian dish names
+# would bias the recognizer toward "shawarma" when a caller to an Italian
+# restaurant said "carbonara". Onboarding a new business means rewriting
+# the list below from ITS menu — there is no code change to make.
+#
+# Keep it a bare comma-separated term list, never a fluent sentence:
+# Whisper continues sentences it is given, and an earlier prose version
+# came back as a transcript of what the caller supposedly said.
+STT_VOCABULARY="shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, gluten free, takeout, delivery, catering, reservation, parking"
+
+echo "==> Setting the speech-recognition vocabulary..."
+VOCAB_STATUS="$(python3 -c "
+import json, sys
+print(json.dumps({'stt_vocabulary': sys.argv[1]}))
+" "$STT_VOCABULARY" | curl -sS -o /dev/null -w '%{http_code}' \
+  -X PATCH "$API_BASE/restaurants/$RESTAURANT_ID" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @-)"
+if [ "$VOCAB_STATUS" = "200" ]; then
+  echo "    OK"
+else
+  echo "    FAILED (HTTP $VOCAB_STATUS) — documents below still upload; speech"
+  echo "    recognition just falls back to the deployment-wide default."
+fi
 
 upload "$TMP_DIR/location.txt" "Location & Address" "policy"
 upload "$TMP_DIR/parking.txt" "Parking" "policy"

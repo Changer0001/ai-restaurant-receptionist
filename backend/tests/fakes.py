@@ -114,15 +114,20 @@ class ScriptedSTTProvider(STTProvider):
     Returns a queue of canned (text, confidence) results in order,
     regardless of the actual audio bytes passed in. Every call's audio is
     recorded in `.calls` for tests that want to assert transcribe() was
-    (or wasn't) invoked, and with what.
+    (or wasn't) invoked, and with what; the vocabulary hint each call
+    passed is recorded in `.vocabularies`, which is how tests check that
+    a restaurant's own dish names reach speech recognition rather than
+    another restaurant's.
     """
 
     def __init__(self, responses: list[tuple[str, float]]):
         self._responses = list(responses)
         self.calls: list[bytes] = []
+        self.vocabularies: list[str | None] = []
 
-    async def transcribe(self, audio: bytes) -> tuple[str, float]:
+    async def transcribe(self, audio: bytes, vocabulary: str | None = None) -> tuple[str, float]:
         self.calls.append(audio)
+        self.vocabularies.append(vocabulary)
         if not self._responses:
             return "", 0.0
         return self._responses.pop(0)

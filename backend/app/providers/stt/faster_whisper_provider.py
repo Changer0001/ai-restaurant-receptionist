@@ -9,7 +9,7 @@ import asyncio
 import io
 import logging
 import math
-from typing import Tuple
+from typing import Optional, Tuple
 
 from faster_whisper import WhisperModel
 
@@ -77,8 +77,10 @@ class FasterWhisperSTTProvider(STTProvider):
             )
         return self.model
 
-    async def transcribe(self, audio: bytes) -> Tuple[str, float]:
-        """Transcribe audio to text."""
+    async def transcribe(
+        self, audio: bytes, vocabulary: Optional[str] = None
+    ) -> Tuple[str, float]:
+        """Transcribe audio to text. See STTProvider.transcribe."""
         model = await self._load_model()
         # WhisperModel.transcribe() is synchronous, and the actual model
         # inference happens lazily as its returned generator is iterated
@@ -86,9 +88,13 @@ class FasterWhisperSTTProvider(STTProvider):
         # iteration must run off the event loop, so the whole thing goes
         # through one asyncio.to_thread() rather than just wrapping the
         # initial call.
-        return await asyncio.to_thread(self._transcribe_sync, model, audio)
+        return await asyncio.to_thread(
+            self._transcribe_sync, model, audio, vocabulary or self.initial_prompt
+        )
 
-    def _transcribe_sync(self, model: WhisperModel, audio: bytes) -> Tuple[str, float]:
+    def _transcribe_sync(
+        self, model: WhisperModel, audio: bytes, vocabulary: str
+    ) -> Tuple[str, float]:
         try:
             audio_file = io.BytesIO(audio)
 
@@ -101,7 +107,7 @@ class FasterWhisperSTTProvider(STTProvider):
                 # Whisper gets wrong without a hint: real calls produced
                 # "hollow options" for "halal options" and "chicken show,
                 # Emma" for "chicken shawarma".
-                initial_prompt=self.initial_prompt or None,
+                initial_prompt=vocabulary or None,
                 # False, despite the name sounding helpful: each caller
                 # utterance is transcribed as its own independent audio
                 # buffer, so there is no genuine prior context to carry —

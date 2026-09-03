@@ -220,6 +220,20 @@ class ConversationEngine:
     def _now(self) -> datetime:
         return datetime.now(ZoneInfo(self.restaurant.timezone))
 
+    def _collects_reservations(self) -> bool:
+        """
+        Whether this restaurant wants the AI to take booking details, or
+        to offer a human instead.
+
+        Per-restaurant, falling back to the deployment default when the
+        restaurant hasn't expressed a preference — a place with a booking
+        system and a place with a paper diary want opposite behavior, and
+        that is a property of the client, not of the deployment.
+        """
+        if self.restaurant.takes_reservations is None:
+            return settings.FEATURE_RESERVATION_COLLECTION
+        return self.restaurant.takes_reservations
+
     async def handle_turn(
         self, context: ConversationContext, message: str, call_sid: Optional[str] = None
     ) -> TurnResult:
@@ -328,7 +342,7 @@ class ConversationEngine:
             context.answered_something = True
             return self._say(context, context.known_reservation)
 
-        if not settings.FEATURE_RESERVATION_COLLECTION:
+        if not self._collects_reservations():
             # Some restaurants have no booking system of their own to
             # write a collected reservation into (e.g. paper-only) —
             # offering a human handoff instead of the AI collecting

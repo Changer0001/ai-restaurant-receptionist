@@ -166,6 +166,70 @@ async def test_reservation_offers_a_transfer_when_collection_is_disabled(
     assert context.state == ConversationState.TRANSFER_TO_HUMAN
 
 
+async def test_a_restaurant_can_opt_out_of_reservations_on_a_deployment_that_takes_them(
+    db_session, vector_db, embedding_provider, restaurant, monkeypatch
+):
+    """
+    One process serves several restaurants, so "do we take bookings?" is
+    a property of the client, not of the deployment. A walk-ins-only
+    place must be able to say no without every other restaurant on the
+    same box losing its reservation flow.
+    """
+    monkeypatch.setattr(settings, "FEATURE_RESERVATION_COLLECTION", True)
+    restaurant.takes_reservations = False
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I'd like a table for four this Friday at 7")
+
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "reservation_request"
+    assert not any("Extract reservation details" in call for call in llm.calls)
+
+
+async def test_a_restaurant_can_opt_in_on_a_deployment_that_does_not_take_them(
+    db_session, vector_db, embedding_provider, restaurant, monkeypatch
+):
+    """The override has to work in both directions, or half the clients
+    on a shared deployment need a code change to be onboarded."""
+    monkeypatch.setattr(settings, "FEATURE_RESERVATION_COLLECTION", False)
+    restaurant.takes_reservations = True
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (
+                contains("Extract reservation details"),
+                json.dumps(
+                    {
+                        "customer_name": None,
+                        "customer_phone": None,
+                        "reservation_date": "2026-09-04",
+                        "reservation_time": "19:00",
+                        "party_size": 4,
+                        "special_notes": None,
+                    }
+                ),
+            ),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "I'd like a table for four this Friday at 7")
+
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+    assert any("Extract reservation details" in call for call in llm.calls)
+
+
 async def test_full_reservation_flow_creates_a_real_reservation(db_session, vector_db, embedding_provider, restaurant):
     extraction_responses = iter(
         [

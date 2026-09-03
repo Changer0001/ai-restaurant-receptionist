@@ -1,9 +1,11 @@
 """
 Tests for app.voice.speech_text — how text gets read aloud.
 
-Every case here comes from content the assistant actually says on a
-call: prices and the phone number are in the seeded knowledge base, and
-the address is in the location document.
+Every case here is shaped like content the assistant actually says on a
+call — prices and a phone number from the knowledge base, an address
+from the location document — but the rules under test are deliberately
+restaurant-agnostic: a business in another state, on another street,
+serving another cuisine gets read aloud correctly with no code change.
 """
 
 from app.voice.speech_text import to_spoken
@@ -40,7 +42,35 @@ def test_a_zip_code_is_spelled_out():
 
 def test_street_abbreviations_are_expanded():
     assert "Street" in to_spoken("We're on Main St.")
-    assert "California" in to_spoken("El Cajon, CA")
+    assert "Avenue" in to_spoken("We're on Grand Ave.")
+
+
+def test_state_codes_are_expanded_for_any_state():
+    """Nothing here is specific to the restaurant this was built for —
+    onboarding a business in another state must not need a code change."""
+    assert "California" in to_spoken("We're in El Cajon, CA 92020.")
+    assert "Texas" in to_spoken("We're in Austin, TX.")
+    assert "New York" in to_spoken("Brooklyn, NY")
+
+
+def test_a_two_letter_word_that_is_also_a_state_code_is_left_alone():
+    """OR, IN, OK, ME and HI are state codes and ordinary words. Only the
+    "City, ST" position is safe to rewrite."""
+    assert to_spoken("Takeout OR delivery, either works.") == "Takeout OR delivery, either works."
+    assert "Indiana" not in to_spoken("Everything IN the case is fresh.")
+
+
+def test_compass_abbreviations_in_addresses_are_expanded():
+    assert "East Main" in to_spoken("We're at 388 E. Main Street.")
+    assert "East Main" in to_spoken("We're at 388 E Main Street.")
+    assert "Southwest Broadway" in to_spoken("We're at 120 SW Broadway.")
+
+
+def test_a_bare_capital_letter_is_not_treated_as_a_direction():
+    """Without a period and without a house number in front of it, a lone
+    capital is just a letter — rewriting it is a mispronunciation."""
+    plain = "Ask for N Roberts when you get here."
+    assert to_spoken(plain) == plain
 
 
 def test_symbols_that_would_be_voiced_as_symbols():

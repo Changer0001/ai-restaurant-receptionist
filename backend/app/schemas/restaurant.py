@@ -22,6 +22,8 @@ class RestaurantRead(BaseModel):
     transfer_number: Optional[str]
     menu_url: Optional[str]
     ai_greeting: Optional[str]
+    stt_vocabulary: Optional[str]
+    takes_reservations: Optional[bool]
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -46,4 +48,8 @@ class RestaurantUpdate(BaseModel):
     transfer_number: Optional[str] = Field(default=None, max_length=20)
     menu_url: Optional[str] = Field(default=None, max_length=500)
     ai_greeting: Optional[str] = None
+    # Both left out of a PATCH mean "don't change"; see Restaurant in
+    # app/db/models.py for what NULL means once stored.
+    stt_vocabulary: Optional[str] = None
+    takes_reservations: Optional[bool] = None
     is_active: Optional[bool] = None

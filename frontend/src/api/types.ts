@@ -40,6 +40,10 @@ export interface Restaurant {
   transfer_number: string | null
   menu_url: string | null
   ai_greeting: string | null
+  stt_vocabulary: string | null
+  // null means "use the deployment-wide default" — see Restaurant in
+  // backend/app/db/models.py.
+  takes_reservations: boolean | null
   is_active: boolean
   created_at: string
   updated_at: string

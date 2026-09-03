@@ -95,14 +95,16 @@ def _split_into_speakable_chunks(text: str) -> list[str]:
     return chunks
 
 
-def _is_prompt_echo(text: str) -> bool:
+def _is_prompt_echo(text: str, vocabulary: str) -> bool:
     """
     Whether Whisper transcribed its own vocabulary hint instead of the
     caller.
 
-    STT_INITIAL_PROMPT is fed to Whisper as preceding context to bias it
-    toward this restaurant's dish names, and Whisper's job is to continue
-    the text it was given — so on short or unclear audio it sometimes
+    This restaurant's vocabulary (Restaurant.stt_vocabulary, falling back
+    to STT_INITIAL_PROMPT) is fed to Whisper as preceding context to bias
+    it toward the dish names its callers say, and Whisper's job is to
+    continue the text it was given — so on short or unclear audio it
+    sometimes
     continues the prompt rather than transcribing the caller. A real call
     logged the caller as saying "We serve halal Syrian and Mediterranean
     food." That went into the transcript, the conversation history, and
@@ -111,7 +113,7 @@ def _is_prompt_echo(text: str) -> bool:
     Detected by word overlap rather than an exact match, since the echo
     comes back reworded and repunctuated.
     """
-    prompt_words = {word.strip(",.").lower() for word in settings.STT_INITIAL_PROMPT.split()}
+    prompt_words = {word.strip(",.").lower() for word in vocabulary.split()}
     if not prompt_words:
         return False
 
@@ -167,6 +169,9 @@ class CallSession:
         # Populated in start() from past calls and reservations for
         # this caller's number; empty for an unrecognized caller.
         self.caller_profile = caller_service.CallerProfile()
+        # This restaurant's own dish names for speech recognition, or the
+        # deployment default when they haven't been configured.
+        self._vocabulary = restaurant.stt_vocabulary or settings.STT_INITIAL_PROMPT
         self.turn_detector = TurnDetector()
 
         self.final_outcome = CallOutcomeEnum.UNKNOWN
@@ -246,7 +251,7 @@ class CallSession:
         # if STT and TTS are the local CPU work that dominates).
         stage_started = time.perf_counter()
 
-        text, confidence = await self.stt.transcribe(wav_bytes)
+        text, confidence = await self.stt.transcribe(wav_bytes, vocabulary=self._vocabulary)
         stt_seconds = time.perf_counter() - stage_started
         text = text.strip()
         # TEMPORARY debug logging — remove once it's confirmed FAQ
@@ -255,7 +260,7 @@ class CallSession:
         if not _has_speech(text):
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 
-        if _is_prompt_echo(text):
+        if _is_prompt_echo(text, self._vocabulary):
             logger.warning(f"Discarding STT echo of the vocabulary prompt: {text!r}")
             return
 

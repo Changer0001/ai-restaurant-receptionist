@@ -96,13 +96,48 @@ _ABBREVIATIONS = (
     (re.compile(r"\bAve\.(?=\s|$)"), "Avenue"),
     (re.compile(r"\bBlvd\.(?=\s|$)"), "Boulevard"),
     (re.compile(r"\bRd\.(?=\s|$)"), "Road"),
-    (re.compile(r"\bE\.?\s+(?=Main\b)"), "East "),
-    (re.compile(r"\bW\.?\s+(?=Main\b)"), "West "),
-    (re.compile(r"\bCA\b"), "California"),
     (re.compile(r"\bapprox\.?"), "about"),
     (re.compile(r"&"), " and "),
     (re.compile(r"%"), " percent"),
 )
+
+_DIRECTIONS = {
+    "N": "North", "S": "South", "E": "East", "W": "West",
+    "NE": "Northeast", "NW": "Northwest", "SE": "Southeast", "SW": "Southwest",
+}
+
+# A compass abbreviation in a street name. With a period ("388 E. Main
+# St") it can't be anything else. Without one ("388 E Main St") a bare
+# capital letter is too ordinary to rewrite on sight, so it only counts
+# when a house number sits right in front of it.
+_DIRECTION_DOTTED = re.compile(r"\b(NE|NW|SE|SW|N|S|E|W)\.\s+(?=[A-Za-z])")
+_DIRECTION_AFTER_NUMBER = re.compile(r"(?<=\d\s)(NE|NW|SE|SW|N|S|E|W)\s+(?=[A-Z])")
+
+# US state codes, spelled out so an address is read the way it's spoken.
+# Matched only in the "City, ST" position — several of these codes are
+# also ordinary words (OR, IN, OK, ME, HI), and rewriting those wherever
+# they appear would mangle sentences that have nothing to do with an
+# address.
+_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "DC": "Washington D C", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine",
+    "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska",
+    "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio",
+    "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island",
+    "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
+_STATE_AFTER_CITY = re.compile(r",\s*([A-Z]{2})\b(?=[\s,.]|$)")
+
+
+def _expand_state(match: re.Match) -> str:
+    return f", {_STATES.get(match.group(1), match.group(1))}"
 
 
 def to_spoken(text: str) -> str:
@@ -110,6 +145,10 @@ def to_spoken(text: str) -> str:
     spoken = _PHONE.sub(_speak_phone, text)
     spoken = _PRICE.sub(_speak_price, spoken)
     spoken = _ZIP.sub(lambda m: _digits_to_words(m.group(1)), spoken)
+
+    spoken = _DIRECTION_DOTTED.sub(lambda m: f"{_DIRECTIONS[m.group(1)]} ", spoken)
+    spoken = _DIRECTION_AFTER_NUMBER.sub(lambda m: f"{_DIRECTIONS[m.group(1)]} ", spoken)
+    spoken = _STATE_AFTER_CITY.sub(_expand_state, spoken)
 
     for pattern, replacement in _ABBREVIATIONS:
         spoken = pattern.sub(replacement, spoken)

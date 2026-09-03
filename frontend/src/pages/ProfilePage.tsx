@@ -5,7 +5,10 @@ import type { Restaurant } from '@/api/types'
 import { useAuth } from '@/auth/AuthContext'
 import { ErrorBanner, LoadingState, PageHeader } from '@/components/Feedback'
 
-type FormState = Pick<
+// Every text field on the restaurant, kept separate from
+// takes_reservations below because that one is a boolean and the shared
+// text/textarea rendering below can't express it.
+type TextFormState = Pick<
   Restaurant,
   | 'name'
   | 'description'
@@ -20,7 +23,10 @@ type FormState = Pick<
   | 'transfer_number'
   | 'menu_url'
   | 'ai_greeting'
+  | 'stt_vocabulary'
 >
+
+type FormState = TextFormState & Pick<Restaurant, 'takes_reservations'>
 
 function toFormState(restaurant: Restaurant): FormState {
   const {
@@ -37,6 +43,8 @@ function toFormState(restaurant: Restaurant): FormState {
     transfer_number,
     menu_url,
     ai_greeting,
+    stt_vocabulary,
+    takes_reservations,
   } = restaurant
   return {
     name,
@@ -52,10 +60,12 @@ function toFormState(restaurant: Restaurant): FormState {
     transfer_number,
     menu_url,
     ai_greeting,
+    stt_vocabulary,
+    takes_reservations,
   }
 }
 
-const FIELDS: { key: keyof FormState; label: string; type?: 'text' | 'textarea' }[] = [
+const FIELDS: { key: keyof TextFormState; label: string; type?: 'text' | 'textarea' }[] = [
   { key: 'name', label: 'Restaurant name' },
   { key: 'description', label: 'Description', type: 'textarea' },
   { key: 'address', label: 'Address' },
@@ -69,6 +79,13 @@ const FIELDS: { key: keyof FormState; label: string; type?: 'text' | 'textarea' 
   { key: 'transfer_number', label: 'Transfer number (for human handoff)' },
   { key: 'menu_url', label: 'Menu URL' },
   { key: 'ai_greeting', label: 'AI greeting (spoken at the start of every call)', type: 'textarea' },
+  {
+    key: 'stt_vocabulary',
+    label:
+      'Menu words for speech recognition — comma-separated dish names callers say ' +
+      'that are not everyday English (leave blank for the standard list)',
+    type: 'textarea',
+  },
 ]
 
 export function ProfilePage() {
@@ -137,6 +154,31 @@ export function ProfilePage() {
             )}
           </div>
         ))}
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700" htmlFor="takes_reservations">
+            Reservations
+          </label>
+          <select
+            id="takes_reservations"
+            value={form.takes_reservations === null ? '' : String(form.takes_reservations)}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                takes_reservations: e.target.value === '' ? null : e.target.value === 'true',
+              })
+            }
+            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            <option value="">Use the default</option>
+            <option value="true">The AI takes booking details</option>
+            <option value="false">Offer to put the caller through instead</option>
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            Pick the second option if bookings are handled on paper or in a system the AI
+            can&rsquo;t write to — a reservation nobody ever reads is worse than a transfer.
+          </p>
+        </div>
 
         {saveError && <ErrorBanner message={saveError} />}
         {savedAt && <p className="text-sm text-green-600">Saved.</p>}

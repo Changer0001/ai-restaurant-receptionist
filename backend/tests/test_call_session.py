@@ -327,20 +327,23 @@ def test_single_sentence_is_one_chunk():
 # ----------------------------------------------------------------------
 # Whisper echoing its own vocabulary hint
 #
-# STT_INITIAL_PROMPT is fed to Whisper as preceding context to bias it
+# A vocabulary hint is fed to Whisper as preceding context to bias it
 # toward the restaurant's dish names. Whisper's job is to continue the
 # text it is given, so on unclear audio it sometimes continues the
 # prompt instead of transcribing the caller — a real call logged the
 # caller as saying "We serve halal Syrian and Mediterranean food."
+#
+# The hint is per restaurant, so these tests supply their own rather
+# than reading the deployment default.
 # ----------------------------------------------------------------------
+
+_MENU_WORDS = "shawarma, kibbeh, falafel, hummus, tahina, tabouli, fattoush, baklava"
 
 
 def test_prompt_echo_is_detected():
-    from app.core.config import settings
-
-    assert _is_prompt_echo("shawarma, kibbeh, falafel, hummus, tahina")
+    assert _is_prompt_echo("shawarma, kibbeh, falafel, hummus, tahina", _MENU_WORDS)
     # The echo comes back reworded and repunctuated, not character-exact.
-    assert _is_prompt_echo(" ".join(settings.STT_INITIAL_PROMPT.split()[:8]))
+    assert _is_prompt_echo(" ".join(_MENU_WORDS.split()[:6]), _MENU_WORDS)
 
 
 def test_a_caller_using_menu_words_is_not_mistaken_for_an_echo():
@@ -348,7 +351,66 @@ def test_a_caller_using_menu_words_is_not_mistaken_for_an_echo():
     Callers say these words — that's the whole reason they're in the
     hint. Only an utterance made almost entirely of them is an echo.
     """
-    assert not _is_prompt_echo("Do you have chicken shawarma?")
-    assert not _is_prompt_echo("Is the falafel vegan?")
-    assert not _is_prompt_echo("How much is the hummus and the mixed grill?")
-    assert not _is_prompt_echo("shawarma")
+    assert not _is_prompt_echo("Do you have chicken shawarma?", _MENU_WORDS)
+    assert not _is_prompt_echo("Is the falafel vegan?", _MENU_WORDS)
+    assert not _is_prompt_echo("How much is the hummus and the tabouli?", _MENU_WORDS)
+    assert not _is_prompt_echo("shawarma", _MENU_WORDS)
+
+
+def test_the_echo_guard_follows_the_restaurants_own_vocabulary():
+    """
+    The guard is meaningless if it checks against a different
+    restaurant's words: an Italian restaurant's caller saying "carbonara,
+    marinara, bolognese" is an echo of ITS hint, and nothing to do with
+    a Mediterranean menu.
+    """
+    italian = "carbonara, marinara, bolognese, arrabbiata, bruschetta"
+    assert _is_prompt_echo("carbonara, marinara, bolognese, arrabbiata", italian)
+    assert not _is_prompt_echo("carbonara, marinara, bolognese, arrabbiata", _MENU_WORDS)
+
+
+# ----------------------------------------------------------------------
+# Per-restaurant speech-recognition vocabulary
+#
+# One process serves every restaurant, so the vocabulary hint has to
+# travel with the call, not with the deployment. A global list of one
+# cuisine's dish names actively hurts another's: it biases the
+# recognizer toward "shawarma" when the caller said "carbonara".
+# ----------------------------------------------------------------------
+
+
+async def test_a_restaurants_own_vocabulary_reaches_speech_recognition(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    restaurant.stt_vocabulary = "carbonara, marinara, bolognese, bruschetta"
+    llm = ScriptedLLMProvider([], default="FAQ")
+    stt = ScriptedSTTProvider([("Do you have carbonara?", 0.9)])
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    assert stt.vocabularies == ["carbonara, marinara, bolognese, bruschetta"]
+
+
+async def test_a_restaurant_without_its_own_vocabulary_gets_the_default(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """Onboarding a business must never be blocked on filling this in —
+    an unset vocabulary is no worse off than having no per-restaurant
+    setting at all."""
+    from app.core.config import settings
+
+    assert restaurant.stt_vocabulary is None
+    llm = ScriptedLLMProvider([], default="FAQ")
+    stt = ScriptedSTTProvider([("What time do you close?", 0.9)])
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    assert stt.vocabularies == [settings.STT_INITIAL_PROMPT]
