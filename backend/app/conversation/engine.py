@@ -57,16 +57,16 @@ _RESERVATION_FIELD_PROMPTS = {
     "party_size": "How many of you will there be?",
 }
 
-# Asked when the caller's intent isn't clear. Several phrasings because
-# this is the line most likely to be heard twice in a row, and hearing
-# the identical sentence back is what makes a line feel automated. They
-# also avoid "I'm sorry" as an opener — apologizing for not
-# understanding, every time, wears on a caller quickly.
 # Said before the next question while taking a booking. A person
 # acknowledges what you just told them; asking the next question with
 # nothing in between is what filling in a form sounds like.
 _ACKNOWLEDGEMENTS = ("Got it.", "Perfect.", "Great, thank you.", "Lovely.")
 
+# Asked when the caller's intent isn't clear. Several phrasings because
+# this is the line most likely to be heard twice in a row, and hearing
+# the identical sentence back is what makes a line feel automated. They
+# also avoid "I'm sorry" as an opener — apologizing for not
+# understanding, every time, wears on a caller quickly.
 _UNCLEAR_PROMPTS = (
     "Sorry, I didn't quite catch that — what can I help you with?",
     "I want to make sure I get this right. What were you after?",
@@ -89,6 +89,47 @@ _CONFIRM_WORDS = (
     "go ahead",
 )
 _DENY_WORDS = ("no", "nope", "not", "don't", "wrong", "change", "incorrect")
+
+
+# Beyond this length, a reply that merely contains "yes" or "no" is
+# saying something of its own — see _handle_confirm_transfer.
+_SHORT_REPLY_WORDS = 4
+
+
+def _is_short_reply(message: str) -> bool:
+    return len(message.split()) <= _SHORT_REPLY_WORDS
+
+
+# The caller wanting out of the booking they were in the middle of.
+# Without this the reservation flow has no exit: every utterance goes to
+# slot extraction, so "I don't want to make reservation", "I just want to
+# cancel the reservation" and "no, I would like to place an order" were
+# all read as booking details — and a reservation was created for a
+# caller who had said three times that they didn't want one.
+_ABANDON_RESERVATION_PHRASES = (
+    "cancel",
+    "never mind",
+    "nevermind",
+    "forget it",
+    "forget the",
+    "changed my mind",
+    "change my mind",
+    "don't want to make",
+    "dont want to make",
+    "don't want a reservation",
+    "don't want the reservation",
+    "don't want to book",
+    "no reservation",
+    "not a reservation",
+    "place an order",
+    "order instead",
+    "stop",
+)
+
+
+def _wants_out_of_reservation(message: str) -> bool:
+    lowered = message.lower()
+    return any(phrase in lowered for phrase in _ABANDON_RESERVATION_PHRASES)
 
 
 def _says_any_of(message: str, phrases: tuple[str, ...]) -> bool:
@@ -190,7 +231,7 @@ class ConversationEngine:
             return await self._handle_reservation_confirming(context, message, call_sid)
 
         if context.state == ConversationState.CONFIRM_TRANSFER:
-            return self._handle_confirm_transfer(context, message)
+            return await self._handle_confirm_transfer(context, message)
 
         # TRANSFER_TO_HUMAN / ENDED: a live call shouldn't reach the engine
         # again in these states (Phase 5 will have transferred or hung up),
@@ -364,7 +405,22 @@ class ConversationEngine:
     # RESERVATION_COLLECTING / RESERVATION_CONFIRMING
     # ------------------------------------------------------------------
 
+    async def _abandon_reservation(self, context: ConversationContext, message: str) -> TurnResult:
+        """
+        Drop the half-collected booking and deal with what they actually
+        said. Re-running intent rather than just apologising means "no, I
+        would like to place an order" is acted on in the same breath,
+        instead of costing the caller another turn to repeat themselves.
+        """
+        context.reservation_draft = ReservationDraft()
+        context.state = ConversationState.IDENTIFY_INTENT
+        context.unclear_count = 0
+        return await self._handle_identify_intent(context, message)
+
     async def _handle_reservation_collecting(self, context: ConversationContext, message: str) -> TurnResult:
+        if _wants_out_of_reservation(message):
+            return await self._abandon_reservation(context, message)
+
         context.reservation_draft = await extract_reservation_fields(
             self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
         )
@@ -414,6 +470,9 @@ class ConversationEngine:
     async def _handle_reservation_confirming(
         self, context: ConversationContext, message: str, call_sid: Optional[str]
     ) -> TurnResult:
+        if _wants_out_of_reservation(message):
+            return await self._abandon_reservation(context, message)
+
         normalized = message.strip().lower()
 
         if _says_any_of(normalized, _CONFIRM_WORDS):
@@ -479,24 +538,10 @@ class ConversationEngine:
         context.add_turn("assistant", text)
         return TurnResult(response_text=text, state=context.state)
 
-    def _handle_confirm_transfer(self, context: ConversationContext, message: str) -> TurnResult:
+    async def _handle_confirm_transfer(
+        self, context: ConversationContext, message: str
+    ) -> TurnResult:
         normalized = message.strip().lower()
-
-        if _says_any_of(normalized, _CONFIRM_WORDS):
-            reason = context.transfer_reason
-            context.state = ConversationState.TRANSFER_TO_HUMAN
-            text = "Okay, connecting you now."
-            context.add_turn("assistant", text)
-            return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
-
-        if _says_any_of(normalized, _DENY_WORDS):
-            context.state = ConversationState.IDENTIFY_INTENT
-            context.transfer_reason = None
-            # A fresh start on identifying what they need — the UNCLEAR
-            # streak (if any) that led here shouldn't count against a
-            # caller who just chose to keep talking to the AI instead.
-            context.unclear_count = 0
-            return self._say(context, "No problem — is there anything else I can help with?")
 
         # A question asked while the offer is pending gets answered, and
         # the offer stands. A caller asked "sure, but before you transfer
@@ -510,4 +555,37 @@ class ConversationEngine:
                 "Would you still like me to connect you with a team member?",
             )
 
-        return self._say(context, "Sorry, would you like me to connect you with a team member?")
+        # Only a SHORT reply is treated as answering the offer. A longer
+        # sentence that happens to start with "yes" or "no" is the caller
+        # telling you what they actually want, and taking just the first
+        # word throws the rest away — live, "not yet, I just need a
+        # reservation for 7 o'clock tomorrow" was heard as "no" and the
+        # reservation never happened, and "yes, but also I want to make
+        # sure that if we arrive early" was heard as "yes" and the
+        # question was never answered.
+        if _is_short_reply(normalized):
+            if _says_any_of(normalized, _CONFIRM_WORDS):
+                reason = context.transfer_reason
+                context.state = ConversationState.TRANSFER_TO_HUMAN
+                text = "Okay, connecting you now."
+                context.add_turn("assistant", text)
+                return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
+
+            if _says_any_of(normalized, _DENY_WORDS):
+                context.state = ConversationState.IDENTIFY_INTENT
+                context.transfer_reason = None
+                # A fresh start on identifying what they need — the UNCLEAR
+                # streak (if any) that led here shouldn't count against a
+                # caller who just chose to keep talking to the AI instead.
+                context.unclear_count = 0
+                return self._say(context, "No problem — is there anything else I can help with?")
+
+        # Anything else is a new request, not an answer to the offer.
+        # Repeating the offer instead traps the caller: they ask their
+        # question, hear the offer again, ask again — a real call went
+        # round that loop three times, with the caller eventually saying
+        # "well, I'm asking you if I arrive early."
+        context.state = ConversationState.IDENTIFY_INTENT
+        context.transfer_reason = None
+        context.unclear_count = 0
+        return await self._handle_identify_intent(context, message)

@@ -694,3 +694,181 @@ async def test_a_caller_booking_on_someone_elses_behalf_can_still_correct_the_de
 
     assert context.state == ConversationState.RESERVATION_COLLECTING
     assert "change" in result.response_text.lower()
+
+
+# ----------------------------------------------------------------------
+# Getting out of a flow the caller no longer wants
+#
+# Every case below is from one real call. The reservation flow had no
+# exit at all: once collecting, every utterance went to slot extraction,
+# so the caller said "I don't want to make reservation", "I just want to
+# cancel the reservation" and "no, I would like to place an order" — and
+# a reservation was created anyway.
+# ----------------------------------------------------------------------
+
+
+async def test_cancelling_mid_booking_does_not_create_a_reservation(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "SMALLTALK"),
+            (contains("Extract reservation details"), "SHOULD NOT BE CALLED"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.RESERVATION_COLLECTING
+
+    await engine.handle_turn(context, "I just want to cancel the reservation")
+
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert context.reservation_draft.missing_fields()  # draft was thrown away
+    assert not any("Extract reservation details" in call for call in llm.calls)
+
+
+async def test_changing_to_an_order_mid_booking_is_acted_on_immediately(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "no, I would like to place an order" during a booking must not be
+    read as booking details, and must not cost the caller another turn
+    to repeat themselves.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "ORDER"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.RESERVATION_COLLECTING
+
+    result = await engine.handle_turn(context, "No, I would like to place an order")
+
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "order_request"
+    assert "order" in result.response_text.lower()
+
+
+async def test_refusing_at_the_readback_does_not_book_the_table(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    A caller said "No, I don't want you to put that in", then "I just
+    want to cancel the reservation" — and the booking was still created.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "SMALLTALK"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.RESERVATION_CONFIRMING
+
+    result = await engine.handle_turn(context, "Actually cancel that, I've changed my mind")
+
+    assert result.reservation is None
+    assert context.state == ConversationState.IDENTIFY_INTENT
+
+
+async def test_a_question_during_a_transfer_offer_is_answered_not_re_offered(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    A caller asked about arriving early, was offered a transfer, asked
+    again, was offered again, and said "well, I'm asking you if I arrive
+    early." The offer must give way to the question.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "SMALLTALK"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.CONFIRM_TRANSFER
+    context.transfer_reason = "unknown_answer"
+
+    result = await engine.handle_turn(context, "Well, I'm asking you if I arrive early")
+
+    assert "connect you" not in result.response_text.lower()
+    assert context.state != ConversationState.CONFIRM_TRANSFER
+
+
+async def test_a_long_reply_starting_with_no_is_not_read_as_declining(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "not yet, I just need a reservation for 7 o'clock tomorrow" was heard
+    as "no" and the reservation request was thrown away.
+    """
+    import json as _json
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (
+                contains("Extract reservation details"),
+                _json.dumps(
+                    {
+                        "customer_name": None,
+                        "customer_phone": None,
+                        "reservation_date": "2026-09-04",
+                        "reservation_time": "19:00",
+                        "party_size": None,
+                        "special_notes": None,
+                    }
+                ),
+            ),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.CONFIRM_TRANSFER
+    context.transfer_reason = "escalation"
+
+    await engine.handle_turn(context, "Not yet, I just need a reservation for 7 o'clock tomorrow")
+
+    # The reservation request was heard, not discarded as a "no".
+    assert context.state in (
+        ConversationState.RESERVATION_COLLECTING,
+        ConversationState.RESERVATION_CONFIRMING,
+    )
+
+
+async def test_a_short_no_still_declines_the_transfer(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """The fix above must not break the ordinary one-word answer."""
+    llm = ScriptedLLMProvider([])
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.CONFIRM_TRANSFER
+    context.transfer_reason = "escalation"
+
+    result = await engine.handle_turn(context, "No.")
+
+    assert result.should_transfer is False
+    assert context.state == ConversationState.IDENTIFY_INTENT
+
+
+async def test_a_short_yes_still_accepts_the_transfer(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider([])
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    context.state = ConversationState.CONFIRM_TRANSFER
+    context.transfer_reason = "order_request"
+
+    result = await engine.handle_turn(context, "Yes please")
+
+    assert result.should_transfer is True
+    assert result.transfer_reason == "order_request"
