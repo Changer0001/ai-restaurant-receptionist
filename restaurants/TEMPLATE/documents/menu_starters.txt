@@ -1,0 +1,3 @@
+What appetizers do you have? What are your starters? What sides do you have? Do you have salads? How much are the starters?
+
+REPLACE THIS, same shape as the mains: name, what's in it, price.

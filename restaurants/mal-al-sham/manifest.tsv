@@ -1,0 +1,12 @@
+# filename<TAB>document_type<TAB>title
+# Lines starting with # are ignored. Fields are TAB-separated.
+# document_type is one of: menu, faq, policy, general.
+# Order matters only for the progress output; retrieval does not use it.
+location.txt	policy	Location & Address
+parking.txt	policy	Parking
+halal_and_dietary.txt	faq	Halal, Vegetarian & Dietary Needs
+menu_overview.txt	menu	Menu Overview & Recommendations
+menu_grill_and_shawarma.txt	menu	Menu: Shawarma & Grill
+menu_appetizers.txt	menu	Menu: Appetizers, Salads & Breakfast
+ordering_and_catering.txt	faq	Takeout, Delivery & Catering
+about.txt	faq	About the Restaurant

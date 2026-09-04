@@ -1,0 +1,9 @@
+Where are you located? What is your address? How do I get to you? Where are you? What part of town are you in? Can you tell me your location?
+
+REPLACE THIS with the full address, written the way you'd say it aloud.
+
+Then a sentence or two of the things a caller actually needs: the
+neighborhood, the nearest landmark or freeway exit, which side of the
+street. A caller who is already driving needs this more than the zip.
+
+Our phone number is REPLACE-THIS.

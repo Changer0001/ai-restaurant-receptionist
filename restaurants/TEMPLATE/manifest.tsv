@@ -1,0 +1,17 @@
+# filename<TAB>document_type<TAB>title
+# Lines starting with # are ignored. Fields are TAB-separated (real tabs,
+# not spaces — the seeding script splits on them).
+# document_type is one of: menu, faq, policy, general.
+#
+# Delete any row whose document this restaurant doesn't need, and add
+# rows for anything specific to them (a wine list, a happy hour, a second
+# location). Nothing here is required — a restaurant with five documents
+# works exactly as well as one with twelve.
+location.txt	policy	Location & Address
+parking.txt	policy	Parking
+dietary.txt	faq	Dietary Needs & Allergens
+menu_overview.txt	menu	Menu Overview & Recommendations
+menu_mains.txt	menu	Menu: Main Dishes
+menu_starters.txt	menu	Menu: Starters & Sides
+ordering.txt	faq	Takeout, Delivery & Catering
+about.txt	faq	About the Restaurant

@@ -1,0 +1,28 @@
+# Speech-recognition vocabulary for this restaurant.
+#
+# The words THIS menu makes callers say that aren't everyday English.
+# Handed to Whisper as a decoder hint so it spells them right — before
+# this existed, real calls produced "hollow options" for "halal options"
+# and "chicken show, Emma" for "chicken shawarma".
+#
+# Lines starting with # are ignored. Everything else is joined into one
+# comma-separated list.
+#
+# HOW TO FILL THIS IN: read their menu and list every dish name a
+# recognizer trained on general English would get wrong. Include the
+# common misspellings and variants callers say out loud (kebab AND kabob).
+# Add the restaurant's own name if it isn't ordinary English.
+#
+# Keep it a bare term list, NEVER a fluent sentence. Whisper's job is to
+# continue the text it is given, so a sentence is something it can
+# plausibly continue — an earlier version here was prose, and Whisper
+# returned that prose as a transcript of what the *caller* had just said.
+#
+# This list is stored on the restaurant's own row, never globally,
+# because it would actively hurt a different restaurant: a list of one
+# cuisine's dish names biases the recognizer toward "shawarma" when the
+# caller to another restaurant said "carbonara". That is why this file
+# lives per restaurant and why leaving it empty is safe — an empty file
+# falls back to a cuisine-neutral default.
+
+REPLACE-THESE, with-the-dish-names, from-this-menu

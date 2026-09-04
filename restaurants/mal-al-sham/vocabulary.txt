@@ -1,0 +1,26 @@
+# Speech-recognition vocabulary for this restaurant.
+#
+# The words this menu makes callers say that aren't everyday English,
+# handed to Whisper as a decoder hint so it spells them right. Real calls
+# produced "hollow options" for "halal options" and "chicken show, Emma"
+# for "chicken shawarma" before this existed.
+#
+# Lines starting with # are ignored. Everything else is joined into one
+# comma-separated list.
+#
+# Keep it a bare term list, NEVER a fluent sentence. Whisper's job is to
+# continue the text it is given, so a sentence is something it can
+# plausibly continue: an earlier version began "Thanks for calling. We
+# serve halal Syrian and Mediterranean food: ..." and Whisper returned
+# that sentence as a transcript of what the *caller* had just said.
+#
+# Only this restaurant's callers ever see this list — it is stored on the
+# restaurant row, not globally, because these words would actively hurt
+# another restaurant: they bias the recognizer toward "shawarma" when an
+# Italian restaurant's caller said "carbonara".
+
+shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill
+kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul
+manakeesh, zaatar, shish tawook, mansaf, baklava
+halal, vegan, vegetarian, gluten free
+takeout, delivery, catering, reservation, parking

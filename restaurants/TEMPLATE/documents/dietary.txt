@@ -1,0 +1,11 @@
+Do you have vegetarian food? Do you have vegan options? Is there anything gluten free? I have a food allergy. Is your food halal? Is it kosher? Do you serve pork? Do you serve alcohol?
+
+REPLACE THIS with whatever is true for this restaurant, and delete the
+questions above that don't apply to them.
+
+Name actual dishes rather than saying "we have options" — a caller
+asking this wants to know what they can eat, not that a category exists.
+
+For allergies, it is fine to say the kitchen can go through ingredients
+in person or on the phone. Do NOT let the assistant give an allergy
+guarantee from a document.

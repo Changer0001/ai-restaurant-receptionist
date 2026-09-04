@@ -1,79 +1,87 @@
 #!/usr/bin/env bash
 #
-# Seeds one restaurant's AI receptionist with its own content: the RAG
-# knowledge base (via the actual /knowledge/upload API — not raw SQL,
-# since this data has to be chunked and embedded into the vector DB,
-# which only the running app can do; see backend/app/services/
-# knowledge_service.py) and the speech-recognition vocabulary for its
-# menu.
-#
-# ONBOARDING ANOTHER BUSINESS: copy this file, replace the documents and
-# the STT_VOCABULARY list with theirs, and run it. Everything that varies
-# between clients is data — this script, the RestaurantHours table, and
-# the restaurant's own row. There is no per-client code.
+# Loads one restaurant's own content into its AI receptionist: the RAG
+# knowledge base and the speech-recognition vocabulary for its menu.
 #
 # Usage:
-#   ./scripts/seed-knowledge.sh                  # replaces previously seeded docs
-#   KEEP_EXISTING=1 ./scripts/seed-knowledge.sh  # adds without deleting
+#   ./scripts/seed-knowledge.sh restaurants/mal-al-sham
+#   KEEP_EXISTING=1 ./scripts/seed-knowledge.sh restaurants/some-place
+#   ASSUME_YES=1    ./scripts/seed-knowledge.sh restaurants/some-place
 #
-# You'll be prompted for your dashboard login and restaurant ID.
-# Email/password are sent only to your own local backend (API_BASE
-# below) to get a login token — never anywhere else, never logged.
-# Requires FEATURE_RAG on (the default) and the backend already
-# running (e.g. via dev-up.sh / full-restart.sh).
+# ONBOARDING A NEW BUSINESS:
+#   cp -r restaurants/TEMPLATE restaurants/their-name
+#   ...edit the text files...
+#   ./scripts/seed-knowledge.sh restaurants/their-name
 #
-# ---------------------------------------------------------------------
-# Why the documents below are written as questions and answers
+# There is NO restaurant content in this file, on purpose. Everything
+# that varies between clients lives under restaurants/<name>/, so
+# onboarding never means editing a script — and one restaurant's menu
+# can't be shipped to another by someone who forgot to change a line
+# here. See restaurants/README.md.
 #
-# RAG retrieval compares the embedding of what the *caller said* against
-# the embedding of each stored chunk. A chunk that already contains the
-# caller's question ("Where are you located?") sits much closer to that
-# query than a chunk of prose that merely happens to contain the address.
-# Measured on real calls against the earlier prose-style version of these
-# documents, a correct location match scored only 0.485 — barely clear of
-# the 0.43-0.48 that completely unrelated documents scored on the same
-# query. Phrasing each fact as the question a caller actually asks is the
-# cheapest retrieval improvement available here, so every document below
-# leads with real caller phrasings, including the clumsy ones.
+# Uploads go through the real /knowledge/upload API rather than raw SQL,
+# because this data has to be chunked and embedded into the vector DB,
+# which only the running app can do (backend/app/services/
+# knowledge_service.py).
 #
-# Hours are deliberately NOT in here: they're answered deterministically
-# from the RestaurantHours table (see backend/app/conversation/
-# hours_answer.py), and a second, hand-edited copy of the hours in the
-# knowledge base would be a competing source of truth that goes stale.
-# Holiday hours DO belong here — that's the one hours case the structured
-# table can't express.
-#
-# The content is for Mal Al Sham - The Taste of Damascus.
-#
-# Prices below are the restaurant's OWN published prices (malalsham.com),
-# not the ones on the delivery aggregators. That distinction is the whole
-# reason the two disagree: hummus is 8.99 on the restaurant's own menu
-# and 9.99 on Uber Eats/Postmates, because delivery platforms mark prices
-# up to cover their commission. A caller on the phone is asking about
-# dining in or picking up, so the restaurant's own price is the correct
-# answer, and quoting an aggregator's marked-up price would be wrong in
-# the caller's favor to complain about later.
-#
-# Where only an aggregator price was available (falafel, foul, the
-# salads), no price is stated at all — better the assistant says it
-# doesn't have that one than quote a confidently wrong number.
-#
-# Documents contain FACTS ONLY, never instructions to the assistant.
-# Anything written here can be retrieved and read aloud verbatim: an
-# earlier version ended a document with "say the team can give them the
-# exact price", and that line came back as a retrieved chunk on a live
-# call, one step away from being spoken to a caller. Guidance about how
-# to answer belongs in backend/app/prompts/, not in the knowledge base.
-#
-# STILL VERIFY WITH THE RESTAURANT before real callers hear any of this:
-# a published menu can be months out of date, and the owner is the only
-# authority on what they charge today.
-# ---------------------------------------------------------------------
+# You'll be prompted for your dashboard login. Email and password are
+# sent only to your own backend (API_BASE below) to get a login token —
+# never anywhere else, never logged. Requires FEATURE_RAG on (the
+# default) and the backend already running (dev-up.sh / full-restart.sh).
 
 set -euo pipefail
 
 API_BASE="${API_BASE:-http://localhost:8010/api}"
 
+# --- Locate and validate the restaurant's content directory ---------------
+RESTAURANT_DIR="${1:-}"
+if [ -z "$RESTAURANT_DIR" ]; then
+  echo "ERROR: which restaurant's content should be loaded?" >&2
+  echo >&2
+  echo "  ./scripts/seed-knowledge.sh <directory>" >&2
+  echo >&2
+  echo "Available:" >&2
+  for dir in restaurants/*/; do
+    name="$(basename "$dir")"
+    [ "$name" = "TEMPLATE" ] && continue
+    [ -f "$dir/manifest.tsv" ] && echo "  restaurants/$name" >&2
+  done
+  echo >&2
+  echo "New business: cp -r restaurants/TEMPLATE restaurants/their-name" >&2
+  exit 1
+fi
+
+RESTAURANT_DIR="${RESTAURANT_DIR%/}"
+MANIFEST="$RESTAURANT_DIR/manifest.tsv"
+
+if [ ! -f "$MANIFEST" ]; then
+  echo "ERROR: no manifest.tsv in $RESTAURANT_DIR" >&2
+  echo "Expected $MANIFEST — see restaurants/TEMPLATE for the layout." >&2
+  exit 1
+fi
+
+# Every document is checked to exist BEFORE anything is deleted or
+# uploaded. A typo in the manifest must not leave the restaurant with
+# half its old knowledge base wiped and half a new one loaded.
+MISSING=""
+while IFS=$'\t' read -r filename doc_type title; do
+  case "$filename" in ''|'#'*) continue ;; esac
+  [ -f "$RESTAURANT_DIR/documents/$filename" ] || MISSING="$MISSING  $filename"$'\n'
+  if [ -z "$doc_type" ] || [ -z "$title" ]; then
+    echo "ERROR: $MANIFEST line for '$filename' is missing a type or title." >&2
+    echo "Fields must be separated by real TABs, not spaces." >&2
+    exit 1
+  fi
+done < "$MANIFEST"
+
+if [ -n "$MISSING" ]; then
+  echo "ERROR: manifest.tsv lists documents that don't exist:" >&2
+  printf '%s' "$MISSING" >&2
+  echo "Nothing was changed." >&2
+  exit 1
+fi
+
+# --- Log in ---------------------------------------------------------------
 read -rp "Dashboard email: " EMAIL
 read -rsp "Dashboard password: " PASSWORD
 echo
@@ -123,7 +131,43 @@ else:
     echo "$RESTAURANTS" >&2
     exit 1
   fi
-  echo "    Using restaurant: $RESTAURANT_ID"
+fi
+
+# --- Confirm the target, by name ------------------------------------------
+# The one failure this script can cause that a caller would hear is
+# loading one restaurant's menu into another's knowledge base. Retrieval
+# is tenant-filtered, so it can't leak on its own (see
+# backend/tests/test_rag_search.py) — but nothing stops a human pasting
+# the wrong ID, and a UUID is unreadable. So resolve it to a NAME and
+# show it before touching anything.
+RESTAURANT_NAME="$(curl -sS -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$API_BASE/restaurants/$RESTAURANT_ID" \
+  | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('name') or '')
+except Exception:
+    print('')
+" || true)"
+
+if [ -z "$RESTAURANT_NAME" ]; then
+  echo "ERROR: no restaurant $RESTAURANT_ID on this account." >&2
+  exit 1
+fi
+
+DOC_COUNT="$(grep -cvE '^\s*(#|$)' "$MANIFEST" || true)"
+echo
+echo "    Content:    $RESTAURANT_DIR ($DOC_COUNT documents)"
+echo "    Restaurant: $RESTAURANT_NAME"
+echo "                $RESTAURANT_ID"
+echo
+
+if [ -z "${ASSUME_YES:-}" ]; then
+  read -rp "Load this content into \"$RESTAURANT_NAME\"? [y/N] " CONFIRM
+  case "$CONFIRM" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "Cancelled. Nothing was changed."; exit 0 ;;
+  esac
 fi
 
 # --- Clear previously seeded documents ------------------------------------
@@ -148,96 +192,66 @@ except Exception:
   done
 fi
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+# --- Speech-recognition vocabulary ----------------------------------------
+VOCAB_FILE="$RESTAURANT_DIR/vocabulary.txt"
+if [ -f "$VOCAB_FILE" ]; then
+  # Comments stripped, remaining lines joined into one comma-separated
+  # list — the file is formatted for a human to edit, the API wants a
+  # single string.
+  STT_VOCABULARY="$(python3 -c "
+import sys
+terms = []
+for line in open(sys.argv[1], encoding='utf-8'):
+    line = line.split('#')[0].strip().strip(',')
+    if line:
+        terms.append(line)
+print(', '.join(terms))
+" "$VOCAB_FILE")"
+else
+  STT_VOCABULARY=""
+fi
 
-cat > "$TMP_DIR/location.txt" << 'EOF'
-Where are you located? What is your address? How do I get to you? Where are you? What part of town are you in? Can you tell me your location?
+if [ -n "$STT_VOCABULARY" ]; then
+  echo "==> Setting the speech-recognition vocabulary..."
+  VOCAB_RESPONSE="$(python3 -c "
+import json, sys
+print(json.dumps({'stt_vocabulary': sys.argv[1]}))
+" "$STT_VOCABULARY" | curl -sS \
+    -X PATCH "$API_BASE/restaurants/$RESTAURANT_ID" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary @-)"
 
-We're at 388 East Main Street, El Cajon, California, 92020.
+  # Checked by reading the value back out of the response, NOT by
+  # trusting the status code. A backend running code older than the
+  # stt_vocabulary field drops the unknown key and still answers 200 —
+  # so a status-only check reports success on a request that stored
+  # nothing, which is exactly the "it said OK but nothing happened"
+  # failure this script exists to avoid.
+  VOCAB_STORED="$(python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('stt_vocabulary') or '')
+except Exception:
+    print('')
+" <<< "$VOCAB_RESPONSE" || true)"
 
-We're on Main Street in El Cajon, in the Little Baghdad neighborhood in the heart of downtown El Cajon. We're easy to reach from Interstate 8 — take the Main Street exit and we're a short drive down.
+  if [ "$VOCAB_STORED" = "$STT_VOCABULARY" ]; then
+    echo "    OK"
+  else
+    echo "    NOT SET. The documents below still upload, but speech recognition" >&2
+    echo "    falls back to the generic default, so this menu's dish names will" >&2
+    echo "    be transcribed worse. Two usual causes:" >&2
+    echo "      1. The migration hasn't run:" >&2
+    echo "           cd backend && source venv/bin/activate && alembic upgrade head" >&2
+    echo "      2. The backend is still running pre-stt_vocabulary code — restart" >&2
+    echo "         it after pulling, or it silently ignores the field." >&2
+    echo "    Server said: $VOCAB_RESPONSE" >&2
+  fi
+fi
 
-Our phone number is 619-401-1055.
-EOF
-
-cat > "$TMP_DIR/parking.txt" << 'EOF'
-Where do I park? Is there parking? Do you have a parking lot? Is parking free? Is it hard to find parking? Do you have valet?
-
-Yes, there's parking. We have a small lot behind the restaurant, and there's street parking on Main Street and the side streets around us.
-
-The lot behind us is on the small side, so at busy times — weekend evenings especially — you may need to wait for a space to open up, or park on the street nearby. Coming a few minutes early makes it easy.
-EOF
-
-cat > "$TMP_DIR/halal_and_dietary.txt" << 'EOF'
-Is your food halal? Are you a halal restaurant? Is the meat halal? Do you serve pork? Do you serve alcohol? Do you have vegetarian food? Do you have vegan options? Is there anything gluten free? I have a food allergy.
-
-Yes, everything we serve is one hundred percent halal. All of our meat is halal, and we don't serve pork or alcohol.
-
-We have plenty for vegetarians: hummus, falafel, baba ghanoush, foul, fattoush and our other salads, and manakeesh with zaatar. Several of those are vegan as well — hummus, falafel, foul and the salads.
-
-For allergies or strict gluten-free needs, our kitchen staff can go through the exact ingredients in any dish, so it's best to ask when you come in, or call and speak with the team.
-EOF
-
-cat > "$TMP_DIR/menu_overview.txt" << 'EOF'
-What kind of food do you serve? What's on your menu? What do you recommend? What are you known for? What's popular? What kind of restaurant are you? Can you tell me about your menu?
-
-We serve authentic Syrian and Mediterranean food — Damascus home cooking, made fresh here every day.
-
-What we're known for is charcoal-grilled kebabs, shawarma carved fresh off the spit, hand-rolled kibbeh, and hummus we make daily. The mixed grill is the most popular thing on the menu, with the beef and chicken shawarma right behind it.
-
-We serve breakfast, lunch and dinner, and we do desserts and Middle Eastern drinks as well.
-EOF
-
-cat > "$TMP_DIR/menu_grill_and_shawarma.txt" << 'EOF'
-Do you have shawarma? What kind of shawarma do you have? Do you have kebabs? What grill dishes do you have? How much is the shawarma? What does a platter cost? How much are your plates? How much does that cost?
-
-Beef shawarma — marinated beef carved fresh off the rotisserie, served with tahina sauce — is 18.99.
-
-Chicken shawarma — marinated chicken off the spit with our garlic sauce — is 16.99.
-
-The mixed grill, with beef kebab, chicken kebab, beef tikka and chicken tikka, all charcoal grilled, is 24.99.
-
-Fried kibbeh stuffed with spiced ground beef and walnuts is 14.99.
-
-Shawarma fries, topped with beef or chicken shawarma with tahini and garlic paste, are 14.99.
-
-These are our prices for dining in and for pickup. Ordering through a delivery app costs more, because the apps set their own higher prices.
-EOF
-
-cat > "$TMP_DIR/menu_appetizers.txt" << 'EOF'
-What appetizers do you have? Do you have hummus? How much is the hummus? Do you have falafel? What salads do you have? Do you have manakeesh? Do you serve breakfast? What are your starters?
-
-We have hummus made fresh daily — chickpeas blended with tahina, lemon and olive oil — for 8.99.
-
-Falafel comes as a dish of twelve balls with tahina, tomatoes and chopped parsley, served with pickles and pita bread.
-
-Our salads include fattoush: tomato, cucumber, red onion, lettuce and parsley with lemon juice, topped with baked pita chips and pomegranate molasses.
-
-We also do baba ghanoush, baked eggplant mashed with tahina, yogurt, lemon and garlic; and foul, slow-boiled fava beans with tomato, parsley, lemon, garlic and olive oil.
-
-Manakeesh, our fresh-baked flatbread with zaatar and olive oil, is 8.99, and it's a morning item — we serve it in the mornings only.
-EOF
-
-cat > "$TMP_DIR/ordering_and_catering.txt" << 'EOF'
-Do you do takeout? Can I order for pickup? Do you deliver? Do you do delivery? Can I order online? Do you cater? Can you cater an event? Do you take large orders? Do you have a patio? Can I dine in?
-
-Yes, we do takeout — call ahead and pick it up. Our number is 619-401-1055.
-
-For delivery, we're on Grubhub, DoorDash and Uber Eats.
-
-We also cater across San Diego County: basmati rice trays, mansaf, and family platters. For catering, please call at least a day ahead so we can prepare it properly.
-
-For dining in, we have indoor seating and a patio.
-EOF
-
-cat > "$TMP_DIR/about.txt" << 'EOF'
-How long have you been open? Who owns the restaurant? Are you family owned? Tell me about the restaurant. What's your story?
-
-We're family owned. The Ahmed brothers opened us in 2018 as the first Syrian restaurant in El Cajon, cooking from generations-old Damascus family recipes.
-
-Everything is made in house, fresh every day.
-EOF
+# --- Upload the documents -------------------------------------------------
+FAILED=0
 
 upload() {
   local file="$1" title="$2" doc_type="$3"
@@ -252,69 +266,21 @@ upload() {
   if [ "$status" = "201" ]; then
     echo "    OK"
   else
-    echo "    FAILED (HTTP $status): $body"
+    echo "    FAILED (HTTP $status): $body" >&2
+    FAILED=$((FAILED + 1))
   fi
 }
 
-# --- Speech-recognition vocabulary ----------------------------------------
-# The words on this menu that aren't everyday English, handed to Whisper
-# as a decoder hint so it spells them right. Stored per restaurant on
-# purpose: one backend serves them all, and a list of Syrian dish names
-# would bias the recognizer toward "shawarma" when a caller to an Italian
-# restaurant said "carbonara". Onboarding a new business means rewriting
-# the list below from ITS menu — there is no code change to make.
-#
-# Keep it a bare comma-separated term list, never a fluent sentence:
-# Whisper continues sentences it is given, and an earlier prose version
-# came back as a transcript of what the caller supposedly said.
-STT_VOCABULARY="shawarma, beef shawarma, chicken shawarma, kebab, kabob, tikka, mixed grill, kibbeh, falafel, hummus, tahina, tabouli, fattoush, baba ghanoush, foul, manakeesh, zaatar, shish tawook, mansaf, baklava, halal, vegan, vegetarian, gluten free, takeout, delivery, catering, reservation, parking"
-
-echo "==> Setting the speech-recognition vocabulary..."
-VOCAB_RESPONSE="$(python3 -c "
-import json, sys
-print(json.dumps({'stt_vocabulary': sys.argv[1]}))
-" "$STT_VOCABULARY" | curl -sS \
-  -X PATCH "$API_BASE/restaurants/$RESTAURANT_ID" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary @-)"
-
-# Checked by reading the value back out of the response, NOT by trusting
-# the status code. A backend running code older than the stt_vocabulary
-# field drops the unknown key and still answers 200 — so a status-only
-# check reports success on a request that stored nothing, which is
-# exactly the "it said OK but nothing happened" failure this script
-# exists to avoid.
-VOCAB_STORED="$(python3 -c "
-import json, sys
-try:
-    print(json.load(sys.stdin).get('stt_vocabulary') or '')
-except Exception:
-    print('')
-" <<< "$VOCAB_RESPONSE" || true)"
-
-if [ "$VOCAB_STORED" = "$STT_VOCABULARY" ]; then
-  echo "    OK"
-else
-  echo "    NOT SET. The documents below still upload, but speech recognition" >&2
-  echo "    falls back to the generic default, so this menu's dish names will" >&2
-  echo "    be transcribed worse. Two usual causes:" >&2
-  echo "      1. The migration hasn't run:" >&2
-  echo "           cd backend && source venv/bin/activate && alembic upgrade head" >&2
-  echo "      2. The backend is still running pre-stt_vocabulary code — restart" >&2
-  echo "         it after pulling, or it silently ignores the field." >&2
-  echo "    Server said: $VOCAB_RESPONSE" >&2
-fi
-
-upload "$TMP_DIR/location.txt" "Location & Address" "policy"
-upload "$TMP_DIR/parking.txt" "Parking" "policy"
-upload "$TMP_DIR/halal_and_dietary.txt" "Halal, Vegetarian & Dietary Needs" "faq"
-upload "$TMP_DIR/menu_overview.txt" "Menu Overview & Recommendations" "menu"
-upload "$TMP_DIR/menu_grill_and_shawarma.txt" "Menu: Shawarma & Grill" "menu"
-upload "$TMP_DIR/menu_appetizers.txt" "Menu: Appetizers, Salads & Breakfast" "menu"
-upload "$TMP_DIR/ordering_and_catering.txt" "Takeout, Delivery & Catering" "faq"
-upload "$TMP_DIR/about.txt" "About the Restaurant" "faq"
+while IFS=$'\t' read -r filename doc_type title; do
+  case "$filename" in ''|'#'*) continue ;; esac
+  upload "$RESTAURANT_DIR/documents/$filename" "$title" "$doc_type"
+done < "$MANIFEST"
 
 echo
-echo "Done. List what's indexed with:"
+if [ "$FAILED" -gt 0 ]; then
+  echo "$FAILED document(s) failed to upload — see the errors above." >&2
+  exit 1
+fi
+
+echo "Done — $RESTAURANT_NAME is loaded. List what's indexed with:"
 echo "  curl -s -H \"Authorization: Bearer \$TOKEN\" $API_BASE/restaurants/$RESTAURANT_ID/knowledge"

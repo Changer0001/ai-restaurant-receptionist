@@ -1,0 +1,11 @@
+How much is REPLACE-DISH? What does a plate cost? How much are your mains? What main dishes do you have? How much does that cost?
+
+REPLACE THIS. One dish per paragraph: the name, a short description of
+what's actually in it, and the price.
+
+Write prices as digits with cents — 18.99, not "eighteen ninety-nine".
+They're converted to spoken form before the caller hears them.
+
+Only include a price you can verify. A dish listed without a price is
+handled properly: the assistant gives what it has and offers to have
+someone confirm the rest. A wrong price is far worse.

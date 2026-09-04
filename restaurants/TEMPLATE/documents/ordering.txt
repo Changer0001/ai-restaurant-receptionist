@@ -1,0 +1,7 @@
+Do you do takeout? Can I order for pickup? Do you deliver? Do you do delivery? Can I order online? Do you cater? Can you cater an event? Do you take large orders? Do you have a patio? Can I dine in?
+
+REPLACE THIS. Which of takeout, delivery, catering and dining in they
+actually do, and how to do each one.
+
+If they're on delivery apps, name them. If catering needs notice, say how
+much notice.
