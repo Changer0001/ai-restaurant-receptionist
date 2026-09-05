@@ -21,6 +21,7 @@ degrades the caller's experience directly. See docs/architecture.md.
 """
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,6 +45,8 @@ from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
 from app.rag.vector_db import VectorDB
 from app.services import caller_service, hours_service
+
+logger = logging.getLogger(__name__)
 
 # Consecutive UNCLEAR-intent turns before escalating — one retry is
 # reasonable, two straight misses means the automated path isn't working
@@ -864,7 +867,19 @@ class ConversationEngine:
         # the reservation that I just made for tomorrow" — and was walked
         # toward a fresh booking all three times, because as far as the
         # engine knew they had none.
-        context.known_reservation = caller_service.describe_reservation(reservation)
+        # The read-back is cosmetic; the reservation is not. This runs
+        # AFTER the row is written, so letting a formatting error escape
+        # would fail the turn and tell the caller their booking didn't
+        # happen — while the table sits in the database. Being unable to
+        # recite it back is not a reason to deny it exists.
+        try:
+            context.known_reservation = caller_service.describe_reservation(reservation)
+        except Exception:
+            logger.warning(
+                "Could not render the booking read-back; the reservation stands",
+                exc_info=True,
+            )
+            context.known_reservation = None
 
         # Not "submitted" — that's software talking. But not "you're
         # booked" either: this is a request the restaurant still has to

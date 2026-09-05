@@ -94,6 +94,17 @@ class CallDisconnected(Exception):
     """
 
 
+class SpeechUnavailable(Exception):
+    """
+    Nothing could be synthesized at all.
+
+    Distinct from a reply that stops early: if not one word reached the
+    caller, the assistant has no way to serve them, and the honest move
+    is to put them through to the restaurant rather than hold an open,
+    silent line.
+    """
+
+
 SendAudio = Callable[[bytes], Awaitable[None]]
 # Tells the telephony provider to throw away audio it has buffered
 # but not yet played. Without it, interrupting the assistant is
@@ -306,7 +317,18 @@ class CallSession:
         # spoken.
         await call_service.append_transcript_turn(self.db, self.call, "assistant", greeting)
         self.context.add_turn("assistant", greeting)
-        await self._speak(greeting)
+        try:
+            await self._speak(greeting)
+        except SpeechUnavailable:
+            # An answered line that is silent from the first second is
+            # the worst failure this system has. The caller rang a
+            # restaurant, so send them to the restaurant — dropping the
+            # call would lose a customer to a fault they didn't cause.
+            logger.error("Could not speak the greeting; handing the call to a person")
+            self.context.state = ConversationState.TRANSFER_TO_HUMAN
+            self.context.transfer_reason = "escalation"
+            self.final_outcome = CallOutcomeEnum.HUMAN_ESCALATION
+            self.should_close = True
 
     def _is_speaking(self) -> bool:
         return time.monotonic() < self._speaking_until
@@ -615,6 +637,7 @@ class CallSession:
         # Rewrite into spoken form first — before splitting, since this
         # removes the decimal points in prices that would otherwise look
         # like sentence boundaries.
+        spoken_anything = False
         for sentence in _split_into_speakable_chunks(to_spoken(text)):
             # Checked before synthesizing as well as before sending:
             # synthesis is the expensive part, and a caller who has
@@ -622,7 +645,19 @@ class CallSession:
             if self._interrupted:
                 logger.info("Reply cut short by the caller: %r", sentence[:40])
                 return
-            pcm_bytes, native_rate = await self.tts.synthesize(sentence)
+            try:
+                pcm_bytes, native_rate = await self.tts.synthesize(sentence)
+            except CallDisconnected:
+                raise
+            except Exception:
+                # One sentence failing must not throw away the ones
+                # already delivered, nor take the call down. The caller
+                # keeps what they heard; a reply that stops early is
+                # recoverable, a dropped call is not.
+                logger.exception("Speech synthesis failed on: %r", sentence[:60])
+                if not spoken_anything:
+                    raise SpeechUnavailable from None
+                return
             if not pcm_bytes:
                 continue
 
@@ -640,6 +675,7 @@ class CallSession:
             self._speaking_until = playback_ends_at + _PLAYBACK_TAIL_BUFFER_S
 
             await self.send_audio(mulaw_bytes)
+            spoken_anything = True
 
     async def end(self) -> None:
         """Called once the Media Stream disconnects — finalizes the Call record."""

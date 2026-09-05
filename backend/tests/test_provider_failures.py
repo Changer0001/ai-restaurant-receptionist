@@ -132,3 +132,124 @@ async def test_a_working_turn_clears_the_failure_streak(
     await session._process_utterance()   # would be strike 3 if it counted
 
     assert session.should_close is False
+
+
+# ----------------------------------------------------------------------
+# Failures on the paths GAP-006 did not cover
+# ----------------------------------------------------------------------
+
+
+class _BrokenTTS(FakeTTSProvider):
+    """Speech synthesis is down — no audio can be produced at all."""
+
+    async def synthesize(self, text: str):
+        raise RuntimeError("kokoro pipeline unavailable")
+
+
+async def test_a_greeting_that_cannot_be_spoken_reaches_a_person(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    Worse than any mid-call failure: the line is answered and silent from
+    the first second. Dropping the call loses the customer; the caller
+    rang a restaurant, so send them to the restaurant.
+    """
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_greet", "+15551234567", restaurant.phone_number
+    )
+    session = CallSession(
+        db_session, call, restaurant, ScriptedSTTProvider([]), _BrokenTTS(),
+        ScriptedLLMProvider([], default="FAQ"), embedding_provider, vector_db,
+        _RecordingSender(),
+    )
+
+    await session.start()  # must not raise
+
+    assert session.should_close is True
+    assert session.final_outcome == CallOutcomeEnum.HUMAN_ESCALATION
+
+
+async def test_a_booking_that_succeeded_is_never_reported_as_failed(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    describe_reservation string-parses the stored time and is called
+    AFTER the reservation is written. A formatting failure there used to
+    fail the whole turn — so the table existed and the caller was told
+    something went wrong. Telling someone their booking failed when it
+    did not is worse than any wording problem the read-back could have.
+    """
+    import json
+
+    from app.conversation.engine import ConversationEngine
+    from app.conversation.state import ConversationContext, ConversationState
+    from app.services import caller_service
+    from tests.dates import FUTURE_DATE
+    from tests.fakes import contains
+
+    def _broken_describe(_reservation):
+        raise ValueError("unexpected time format")
+
+    original = caller_service.describe_reservation
+    caller_service.describe_reservation = _broken_describe
+    try:
+        llm = ScriptedLLMProvider(
+            [
+                (contains("decide if it needs to be handed off"), "NO"),
+                (contains("Respond with exactly one of these labels"), "RESERVATION"),
+                (
+                    contains("Extract reservation details"),
+                    json.dumps({"customer_name": "Jane", "customer_phone": "5551234567",
+                                "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                                "party_size": 2, "special_notes": None}),
+                ),
+            ]
+        )
+        engine = ConversationEngine(
+            llm, embedding_provider, vector_db, db_session, restaurant
+        )
+        context = ConversationContext(restaurant_id=restaurant.id)
+
+        await engine.handle_turn(context, "table for two Friday at 7, Jane, 555-123-4567")
+        assert context.state == ConversationState.RESERVATION_CONFIRMING
+
+        result = await engine.handle_turn(context, "yes please", call_sid="CA_book")
+
+        # The booking stands, and the caller is told so.
+        assert result.reservation is not None
+        assert "got that down" in result.response_text
+    finally:
+        caller_service.describe_reservation = original
+
+
+async def test_tts_failing_mid_reply_does_not_kill_the_turn(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    Replies are synthesized a sentence at a time. The second sentence
+    failing must not throw away the first, nor take down the call.
+    """
+    class _FailsAfterFirst(FakeTTSProvider):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        async def synthesize(self, text: str):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("kokoro fell over")
+            return await super().synthesize(text)
+
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_mid", "+15551234567", restaurant.phone_number
+    )
+    sender = _RecordingSender()
+    session = CallSession(
+        db_session, call, restaurant, ScriptedSTTProvider([]), _FailsAfterFirst(),
+        ScriptedLLMProvider([], default="FAQ"), embedding_provider, vector_db, sender,
+    )
+
+    await session._speak("Here is the first sentence. And here is a second one.")
+
+    # The caller heard what could be produced, and the call survives.
+    assert len(sender.sent) == 1
