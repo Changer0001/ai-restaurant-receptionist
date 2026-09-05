@@ -187,6 +187,19 @@ _DIDNT_CATCH_PROMPTS = (
 # up on the whole system rather than on the connection.
 _MAX_UNHEARD_BEFORE_TRANSFER = 3
 
+# Said when something behind the scenes failed. Honest without being
+# technical: the caller does not need to know which service is down, and
+# telling them would be noise at best.
+_ENGINE_TROUBLE_PROMPTS = (
+    "Sorry, I didn't quite get that sorted — could you say that once more?",
+    "Apologies, something went wrong on my end there. What was it you needed?",
+)
+
+# Consecutive engine failures before handing over. Two is enough to tell
+# a blip from an outage, and a caller listening to a third apology has
+# already decided this system doesn't work.
+_MAX_ENGINE_FAILURES_BEFORE_TRANSFER = 3
+
 # How long end() lets an in-flight turn finish before cancelling it.
 # Long enough for a turn that is already writing to the database to
 # land, short enough that a hangup during a long synthesis doesn't
@@ -241,6 +254,10 @@ class CallSession:
         # Consecutive turns too garbled to act on — see
         # STT_MIN_CONFIDENCE. Reset by any turn we do understand.
         self._unheard_count = 0
+        # Consecutive turns where the engine raised — a provider
+        # outage rather than anything the caller did. Reset by any
+        # turn that completes.
+        self._engine_failures = 0
         # The in-flight turn, so a second one can't start on top of
         # it and so an ending call can cancel it.
         self._turn_task: Optional[asyncio.Task] = None
@@ -452,8 +469,25 @@ class CallSession:
             await self._speak(_PROCESSING_FILLER)
 
         engine_started = time.perf_counter()
-        result = await self.engine.handle_turn(self.context, text, call_sid=self.call.call_sid)
+        try:
+            result = await self.engine.handle_turn(
+                self.context, text, call_sid=self.call.call_sid
+            )
+        except CallDisconnected:
+            raise
+        except Exception:
+            # A phone call has no error page. Whatever broke behind the
+            # scenes — the LLM provider, the embedding service, the
+            # vector store — the caller is still holding the line, and
+            # the cheapest possible response is the worst one: silence,
+            # until they give up. The engine itself has no error
+            # handling, deliberately: this is the boundary where a
+            # failure has to become something a person can hear.
+            logger.exception("Conversation engine failed; recovering the call")
+            await self._recover_from_engine_failure()
+            return
         engine_seconds = time.perf_counter() - engine_started
+        self._engine_failures = 0
 
         await call_service.append_transcript_turn(
             self.db, self.call, "assistant", result.response_text
@@ -505,6 +539,34 @@ class CallSession:
             # the honest version of this: answered_something is set where
             # a real answer is given, and nowhere else.
             self.final_outcome = CallOutcomeEnum.FAQ_ANSWERED
+
+    async def _recover_from_engine_failure(self) -> None:
+        """
+        Tell the caller something true, then get them to a person.
+
+        Never names the component that failed. "reservation_service
+        timeout" is meaningless to someone holding a phone, and a system
+        that reads its own stack traces out loud is worse than one that
+        simply says it is struggling.
+        """
+        self._engine_failures += 1
+
+        if self._engine_failures >= _MAX_ENGINE_FAILURES_BEFORE_TRANSFER:
+            # Apologising forever is its own failure mode. If the backend
+            # is genuinely down, the caller needs someone who can help.
+            await self._say_and_record(
+                "I'm sorry — I'm having some trouble on my end. "
+                "Let me put you through to someone."
+            )
+            self.context.state = ConversationState.TRANSFER_TO_HUMAN
+            self.context.transfer_reason = "escalation"
+            self.final_outcome = CallOutcomeEnum.HUMAN_ESCALATION
+            self.should_close = True
+            return
+
+        await self._say_and_record(
+            pick(_ENGINE_TROUBLE_PROMPTS, self.context.last_assistant_text())
+        )
 
     async def _say_and_record(self, text: str) -> None:
         """
