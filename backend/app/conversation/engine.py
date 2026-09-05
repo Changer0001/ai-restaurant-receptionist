@@ -263,6 +263,32 @@ def _wants_to_change_a_booking(message: str) -> bool:
     return _says_any_of(message, _CANCEL_OR_CHANGE_PHRASES)
 
 
+# Openers that make an utterance a question even without a question mark
+# — speech recognition punctuates unreliably, so "do you have parking"
+# arrives as often as "do you have parking?".
+_QUESTION_STARTS = (
+    "what", "where", "when", "why", "how", "who", "which",
+    "do", "does", "did", "is", "are", "was", "were",
+    "can", "could", "will", "would", "should", "have", "has",
+)
+
+
+def _looks_like_a_question(message: str) -> bool:
+    """
+    Whether the caller asked something rather than answering.
+
+    Used mid-booking, where the alternative reading is "this is a
+    booking detail" — so it only has to separate a question from a name,
+    a date, a time or a party size, which is a narrow job a list of
+    openers does reliably.
+    """
+    stripped = message.strip()
+    if stripped.endswith("?"):
+        return True
+    words = re.sub(r"[^a-z0-9 ]+", " ", stripped.lower()).split()
+    return bool(words) and words[0] in _QUESTION_STARTS
+
+
 @dataclass
 class TurnResult:
     """What the engine produced for one caller turn."""
@@ -548,29 +574,102 @@ class ConversationEngine:
         return await self._handle_identify_intent(context, message)
 
     async def _handle_reservation_collecting(self, context: ConversationContext, message: str) -> TurnResult:
+        # A caller who wants out, or who wants off the phone entirely,
+        # gets out. Without the farewell check "let's hang up" and "I
+        # don't want to talk to you anymore, just hang up" were both fed
+        # to the slot extractor as though they were booking details.
+        # A farewell is answered as one, not re-classified. Routing it
+        # through _abandon_reservation would re-run intent on "let's hang
+        # up" while a booking is plainly in the air, and a classifier
+        # that comes back RESERVATION drops the caller straight back into
+        # the flow they just asked to leave.
+        if smalltalk.is_farewell(message):
+            context.reservation_draft = ReservationDraft()
+            context.state = ConversationState.IDENTIFY_INTENT
+            context.unclear_count = 0
+            return self._say(context, self._smalltalk_reply(context, message))
+
         if _wants_out_of_reservation(message):
             return await self._abandon_reservation(context, message)
 
+        previous = context.reservation_draft
         context.reservation_draft = await extract_reservation_fields(
             self.llm, self.restaurant.name, context.reservation_draft, message, self.restaurant.timezone, self._now()
         )
+
+        # Nothing in it was a booking detail and it reads as a question:
+        # they asked something in the middle of booking. Every utterance
+        # used to go to the extractor regardless, so a caller mid-booking
+        # who asked "what was my reservation?" or "do you have parking?"
+        # got it silently swallowed and the same field asked for again —
+        # a real call went round that loop five times before giving up.
+        # A person answers, then picks the booking back up.
+        if context.reservation_draft == previous and _looks_like_a_question(message):
+            return await self._answer_without_losing_the_booking(context, message)
+
         return self._advance_reservation_collection(context, acknowledge=True)
+
+    async def _answer_without_losing_the_booking(
+        self, context: ConversationContext, message: str
+    ) -> TurnResult:
+        """
+        Answer a question asked mid-booking, then resume where we were.
+
+        Deliberately does NOT route through _handle_faq: that offers a
+        transfer when it can't answer, which would park the call in
+        CONFIRM_TRANSFER and throw away the half-collected booking. Not
+        knowing one thing is not a reason to lose the table.
+        """
+        if context.known_reservation and _asks_about_existing_reservation(message):
+            answer = context.known_reservation
+        else:
+            answer, grounded = await generate_faq_answer(
+                self.llm,
+                self.embedder,
+                self.vector_db,
+                self.restaurant.id,
+                self.restaurant.name,
+                message,
+                # The question alone, NOT build_retrieval_query's
+                # "previous turn + this one". Mid-booking the previous
+                # turn is a name, a date or a phone number — pure noise
+                # in an embedding, and enough of it to push the right
+                # document below the relevance threshold.
+                search_query=message,
+                conversation_context=context.history_text(max_turns=6),
+            )
+            if not grounded:
+                answer = "I don't have that one to hand, I'm afraid."
+
+        context.answered_something = True
+        return self._say(context, f"{answer} {self._next_reservation_prompt(context)}")
+
+    def _next_reservation_prompt(self, context: ConversationContext) -> str:
+        """
+        What to ask next to move the booking along, as text.
+
+        Separate from _advance_reservation_collection so a question can be
+        answered and the booking resumed in the same breath, rather than
+        costing the caller an extra turn to get back to where they were.
+        """
+        missing = context.reservation_draft.missing_fields()
+        if missing:
+            return _RESERVATION_FIELD_PROMPTS[missing[0]]
+        context.state = ConversationState.RESERVATION_CONFIRMING
+        return self._confirmation_text(context.reservation_draft, context)
 
     def _advance_reservation_collection(
         self, context: ConversationContext, acknowledge: bool = False
     ) -> TurnResult:
-        missing = context.reservation_draft.missing_fields()
-        if missing:
-            question = _RESERVATION_FIELD_PROMPTS[missing[0]]
-            # A person says "got it" before the next question. Firing one
-            # question straight after another, with nothing in between,
-            # is what filling in a form sounds like.
-            if acknowledge:
-                question = f"{pick(_ACKNOWLEDGEMENTS, context.last_assistant_text())} {question}"
-            return self._say(context, question)
-
-        context.state = ConversationState.RESERVATION_CONFIRMING
-        return self._say(context, self._confirmation_text(context.reservation_draft, context))
+        still_collecting = bool(context.reservation_draft.missing_fields())
+        question = self._next_reservation_prompt(context)
+        # A person says "got it" before the next question. Firing one
+        # question straight after another, with nothing in between, is
+        # what filling in a form sounds like. Not before a read-back,
+        # which already opens with "let me read that back".
+        if acknowledge and still_collecting:
+            question = f"{pick(_ACKNOWLEDGEMENTS, context.last_assistant_text())} {question}"
+        return self._say(context, question)
 
     def _confirmation_text(self, draft: ReservationDraft, context: ConversationContext) -> str:
         # Only called once _advance_reservation_collection() has confirmed

@@ -23,7 +23,22 @@ from typing import Optional
 from app.conversation.phrasing import pick
 
 _THANKS_WORDS = ("thank", "thanks", "appreciate")
-_GOODBYE_WORDS = ("bye", "goodbye", "good night", "have a good", "take care")
+# "hang up" and friends are here because a real caller said "let's hang
+# up" and then "okay, just, I don't want to talk to you anymore, just
+# hang up" — and was answered both times as though they'd asked
+# something. Being unable to end a call you started is the single most
+# trapped a caller can feel.
+_GOODBYE_WORDS = (
+    "bye",
+    "goodbye",
+    "good night",
+    "have a good",
+    "take care",
+    "hang up",
+    "end the call",
+    "i'm done",
+    "im done",
+)
 _DONE_PHRASES = ("that's all", "thats all", "that's it", "thats it", "nothing else", "no that's")
 _IDENTITY_PHRASES = (
     "your name",

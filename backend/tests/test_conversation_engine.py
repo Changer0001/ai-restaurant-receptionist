@@ -1388,3 +1388,128 @@ async def test_making_a_new_booking_is_not_mistaken_for_changing_one(
         db_session, vector_db, embedding_provider, restaurant, llm
     )
     assert context.state == ConversationState.RESERVATION_CONFIRMING
+
+
+# ----------------------------------------------------------------------
+# Being able to get out of, or ask something during, a booking
+#
+# Every utterance in RESERVATION_COLLECTING used to go to the slot
+# extractor. A real caller asked "what was my reservation?", then "can
+# you remind me the reservation that I made?", then "can you just remind
+# me the reservation that I just made?", then "let's hang up", then "I
+# don't want to talk to you anymore, just hang up" — five turns, all
+# swallowed as booking details.
+# ----------------------------------------------------------------------
+
+
+def _collecting_llm(answer="We've a small lot behind the restaurant."):
+    """An engine that has asked for one more field and will answer a
+    question if one is asked instead."""
+    return ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (
+                contains("Extract reservation details"),
+                json.dumps({"customer_name": "Jane", "customer_phone": "5551234567",
+                            "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                            "party_size": None, "special_notes": None}),
+            ),
+            (contains("using ONLY the information below"), answer),
+        ]
+    )
+
+
+async def _mid_booking(db_session, vector_db, embedding_provider, restaurant, llm):
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    await engine.handle_turn(context, "I'd like a table Friday at 7 for Jane, 555-123-4567")
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+    return engine, context
+
+
+async def test_a_question_mid_booking_is_answered_and_the_booking_resumes(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    await knowledge_service.create_document(
+        db_session, vector_db, embedding_provider, restaurant.id, "Parking",
+        "Is there parking? Yes, there is parking in a small lot behind the restaurant.",
+        "policy", None,
+    )
+    await db_session.commit()
+
+    llm = _collecting_llm()
+    engine, context = await _mid_booking(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    result = await engine.handle_turn(context, "is there parking?")
+
+    # Answered...
+    assert "lot" in result.response_text
+    # ...and the booking is still going, asking for what's still missing.
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+    assert "how many" in result.response_text.lower()
+    assert context.reservation_draft.customer_name == "Jane"
+
+
+async def test_a_question_it_cannot_answer_does_not_lose_the_booking(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """Not knowing one thing is not a reason to throw away the table —
+    the FAQ path's usual "shall I transfer you?" would park the call in
+    CONFIRM_TRANSFER and drop the half-collected booking."""
+    llm = _collecting_llm()
+    engine, context = await _mid_booking(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    result = await engine.handle_turn(context, "do you validate parking?")
+
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+    assert context.reservation_draft.customer_name == "Jane"
+    assert "how many" in result.response_text.lower()
+
+
+async def test_asking_to_hang_up_mid_booking_ends_the_booking(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "let's hang up" and "I don't want to talk to you anymore, just hang
+    up" were both fed to the slot extractor. Being unable to end a call
+    you started is the most trapped a caller can feel.
+    """
+    llm = _collecting_llm()
+    engine, context = await _mid_booking(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    await engine.handle_turn(context, "let's hang up")
+
+    assert context.state != ConversationState.RESERVATION_COLLECTING
+    assert context.reservation_draft.missing_fields()  # draft dropped
+
+
+def test_hanging_up_is_recognised_as_a_farewell():
+    from app.conversation.smalltalk import is_farewell
+
+    assert is_farewell("let's hang up")
+    assert is_farewell("okay, just, I don't want to talk to you anymore, just hang up")
+    assert is_farewell("I'm done")
+    assert not is_farewell("what time do you close")
+
+
+def test_a_booking_detail_is_not_mistaken_for_a_question():
+    """The guard must not fire on ordinary answers, or a caller giving
+    their details would never get past the first field."""
+    from app.conversation.engine import _looks_like_a_question
+
+    assert not _looks_like_a_question("Jane Smith")
+    assert not _looks_like_a_question("six people")
+    assert not _looks_like_a_question("tomorrow at 7")
+    assert not _looks_like_a_question("555-123-4567")
+    # And still catches questions, with or without the question mark
+    # speech recognition may not supply.
+    assert _looks_like_a_question("is there parking?")
+    assert _looks_like_a_question("do you have parking")
+    assert _looks_like_a_question("what was my reservation")
