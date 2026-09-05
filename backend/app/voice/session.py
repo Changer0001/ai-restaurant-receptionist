@@ -80,6 +80,8 @@ _PLAYBACK_TAIL_BUFFER_S = 0.2
 # conversational exchange the engine or a human reviewer should see.
 _PROCESSING_FILLER = "One moment, let me check on that for you."
 
+
+
 class CallDisconnected(Exception):
     """
     The caller hung up while we were still sending audio.
@@ -184,6 +186,12 @@ _DIDNT_CATCH_PROMPTS = (
 # tries is a fair attempt at a bad line; a fourth is where a caller gives
 # up on the whole system rather than on the connection.
 _MAX_UNHEARD_BEFORE_TRANSFER = 3
+
+# How long end() lets an in-flight turn finish before cancelling it.
+# Long enough for a turn that is already writing to the database to
+# land, short enough that a hangup during a long synthesis doesn't
+# hold the connection open waiting for speech nobody will hear.
+_TURN_DRAIN_SECONDS = 2.0
 
 
 class CallSession:
@@ -342,7 +350,14 @@ class CallSession:
         """
         try:
             await self._process_utterance()
-            await self.db.commit()
+            # Shielded so a cancellation landing mid-commit cannot leave
+            # the write half-done. This session is shared with end(), and
+            # an interrupted commit puts it in SQLAlchemy's "prepared"
+            # state, where every later statement raises — so a caller
+            # hanging up at the wrong moment lost the call's outcome and
+            # transcript entirely. Cancellation still takes effect; it
+            # just waits for the write to land first.
+            await asyncio.shield(self.db.commit())
         except asyncio.CancelledError:
             raise
         except CallDisconnected:
@@ -390,9 +405,8 @@ class CallSession:
         text, confidence = await self.stt.transcribe(wav_bytes, vocabulary=self._vocabulary)
         stt_seconds = time.perf_counter() - stage_started
         text = text.strip()
-        # TEMPORARY debug logging — remove once it's confirmed FAQ
-        # questions (menu/parking/location) aren't being misrouted.
-        logger.warning(f"DEBUG STT transcript: text={text!r} confidence={confidence!r}")
+        # Per-turn tracing. LOG_LEVEL=DEBUG to follow a live call.
+        logger.debug(f"STT transcript: text={text!r} confidence={confidence!r}")
         if not _has_speech(text):
             return  # nothing intelligible — keep listening rather than confuse the engine with silence
 
@@ -573,11 +587,21 @@ class CallSession:
         # corrupts the call record it was trying to write.
         if self._turn_in_flight():
             assert self._turn_task is not None
-            self._turn_task.cancel()
+            # Given a moment to finish before being cancelled. A turn
+            # interrupted by a hangup is usually all but done, and
+            # letting it land keeps the transcript it already recorded —
+            # cancelling a turn that is mid-database-write is how the
+            # call record was being lost.
             try:
-                await self._turn_task
-            except (asyncio.CancelledError, Exception):
-                pass
+                await asyncio.wait_for(
+                    asyncio.shield(self._turn_task), timeout=_TURN_DRAIN_SECONDS
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                self._turn_task.cancel()
+                try:
+                    await self._turn_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         transcript_text = "\n".join(f"{t.role}: {t.content}" for t in self.context.history)
 

@@ -27,7 +27,8 @@ async def should_escalate(
         latest_message=latest_message,
     )
     raw = await llm.generate(prompt, temperature=0.0)
-    # TEMPORARY debug logging — remove once it's confirmed FAQ questions
-    # (menu/parking/location) aren't being misrouted into escalation.
-    logger.warning(f"DEBUG should_escalate: message={latest_message!r} raw_llm_output={raw!r}")
+    # Per-turn tracing. Set LOG_LEVEL=DEBUG to follow a live call
+    # decision by decision; off by default, because a line per turn
+    # at WARNING is what makes a real warning impossible to see.
+    logger.debug(f"should_escalate: message={latest_message!r} raw={raw!r}")
     return strip_thinking(raw).strip().upper().startswith("YES")

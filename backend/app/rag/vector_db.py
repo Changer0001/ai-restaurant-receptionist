@@ -193,10 +193,10 @@ class VectorDB:
 
         for chunk_id, content, metadata, distance in zip(ids, documents, metadatas, distances, strict=True):
             similarity = 1.0 - distance
-            # TEMPORARY debug logging — remove once RAG_RELEVANCE_THRESHOLD
-            # is confirmed well-calibrated against real caller phrasing.
-            logger.warning(
-                f"DEBUG search candidate: content={content[:60]!r} similarity={similarity:.4f} "
+            # Per-candidate tracing, for calibrating the relevance
+            # thresholds against real caller phrasing. LOG_LEVEL=DEBUG.
+            logger.debug(
+                f"search candidate: content={content[:60]!r} similarity={similarity:.4f} "
                 f"threshold={relevance_threshold} kept={similarity >= relevance_threshold}"
             )
             if similarity < relevance_threshold:

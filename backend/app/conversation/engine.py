@@ -74,6 +74,26 @@ _UNCLEAR_PROMPTS = (
     "Could you say a bit more about what you need?",
 )
 
+# Said when the caller answers "yes" to the closing question every reply
+# ends with. "Yes" there means "I do have something else" — so the thing
+# to do is invite it. Answering with the closer again is what produced a
+# real call's four consecutive "yes" turns, the caller saying yes to
+# "anything else?" and hearing "anything else?" back each time.
+_INVITE_PROMPTS = (
+    "Of course — what would you like to know?",
+    "Sure, go ahead.",
+    "Yes, of course. What can I help with?",
+)
+
+# Said when they answer "no" to it. Deliberately ends without a question:
+# asking again is how a caller who has just said they're done gets kept
+# on the line.
+_SIGNOFF_REPLIES = (
+    "Alright — thanks for calling!",
+    "No problem at all. Have a good one!",
+    "Great, thanks for calling. Take care!",
+)
+
 _CONFIRM_WORDS = (
     "yes",
     "yeah",
@@ -273,6 +293,32 @@ _QUESTION_STARTS = (
 )
 
 
+# Closing questions carry no topic — "yes" to one means "I have another
+# question", not "tell me about that". Matched on the distinctive part
+# so any of the phrasings in smalltalk.py is caught.
+_TOPICLESS_CLOSERS = ("anything else", "anything i can help", "what can i help", "how can i help")
+
+
+def _trailing_offer(answer: str) -> Optional[str]:
+    """
+    The question an answer ends with, when it offers something specific.
+
+    None for an answer that doesn't end in a question, and for the
+    topicless closer every reply carries — recording that one would send
+    a caller's "yes" off to search the knowledge base for "anything else
+    I can help with", which retrieves nothing and answers nothing.
+    """
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", answer.strip()) if s.strip()]
+    if not sentences or not sentences[-1].endswith("?"):
+        return None
+
+    question = sentences[-1]
+    lowered = question.lower()
+    if any(closer in lowered for closer in _TOPICLESS_CLOSERS):
+        return None
+    return question
+
+
 def _looks_like_a_question(message: str) -> bool:
     """
     Whether the caller asked something rather than answering.
@@ -389,6 +435,10 @@ class ConversationEngine:
     # ------------------------------------------------------------------
 
     async def _handle_identify_intent(self, context: ConversationContext, message: str) -> TurnResult:
+        answered_a_question = await self._answer_to_our_own_question(context, message)
+        if answered_a_question is not None:
+            return answered_a_question
+
         # Both classify the same message and neither reads the other's
         # result, so they go out together rather than one after the
         # other. On a hosted LLM that's a whole network round trip taken
@@ -406,6 +456,14 @@ class ConversationEngine:
         if escalate:
             return self._offer_transfer(context, "escalation")
 
+        return await self._route_intent(context, message, intent)
+
+    async def _route_intent(
+        self, context: ConversationContext, message: str, intent: str
+    ) -> TurnResult:
+        """Act on a classified intent. Split from the classification
+        itself so each stays readable — one decides what the caller
+        wants, this decides what to do about it."""
         if intent == "OUT_OF_SCOPE":
             # Not an escalation and not a knowledge gap — a restaurant
             # simply doesn't know the weather. Offering to transfer the
@@ -446,6 +504,49 @@ class ConversationEngine:
         if context.unclear_count >= _MAX_UNCLEAR_BEFORE_ESCALATION:
             return self._offer_transfer(context, "repeated_unclear")
         return self._say(context, pick(_UNCLEAR_PROMPTS, context.last_assistant_text()))
+
+    async def _answer_to_our_own_question(
+        self, context: ConversationContext, message: str
+    ) -> Optional[TurnResult]:
+        """
+        Handle a bare yes or no answering something the assistant asked.
+
+        Returns None when this isn't that, and the turn continues to
+        intent classification as normal.
+
+        Every reply the assistant gives ends with a question, but only
+        two states are waiting for an answer to one — collecting a
+        booking and offering a transfer. Everywhere else a bare "yes"
+        was classified SMALLTALK, and the smalltalk reply is itself
+        another "anything else?". A real call went round that loop four
+        times: the caller said yes, heard the closer, said yes again.
+
+        Nothing here needs the model. It runs before classification, so
+        these turns also lose the two LLM round trips they were
+        spending to arrive at the wrong answer.
+        """
+        if not _is_short_reply(message):
+            return None
+        # Before anything has been answered, a bare "yes" isn't
+        # answering us — there was nothing to answer.
+        if not context.answered_something:
+            return None
+
+        reading = _reads_as(message)
+        offered, context.pending_question = context.pending_question, None
+
+        if reading == "confirm":
+            if offered:
+                # A specific offer with a topic — "did you want to hear
+                # about the specials?" Answering it is the whole point of
+                # having asked.
+                return await self._handle_faq(context, offered)
+            return self._say(context, pick(_INVITE_PROMPTS, context.last_assistant_text()))
+
+        if reading == "deny":
+            return self._say(context, pick(_SIGNOFF_REPLIES, context.last_assistant_text()))
+
+        return None
 
     def _smalltalk_reply(self, context: ConversationContext, message: str) -> str:
         return smalltalk.reply_to(
@@ -555,6 +656,11 @@ class ConversationEngine:
         if not grounded:
             return self._offer_transfer(context, "unknown_answer")
         context.answered_something = True
+        # A grounded answer sometimes ends by offering something more
+        # ("did you want to hear the specials?"). Remembering that offer
+        # is what lets the caller's "yes" be answered rather than
+        # acknowledged — see _answer_to_our_own_question.
+        context.pending_question = _trailing_offer(answer)
         return self._say(context, answer)
 
     # ------------------------------------------------------------------
@@ -704,64 +810,73 @@ class ConversationEngine:
 
         normalized = message.strip().lower()
 
-        # A longer reply may be changing a detail rather than answering
-        # the question — "yes, but can you make it 8 instead" contains
-        # "yes", and reading only that books the table at the time the
-        # caller was in the middle of correcting. This is the same guard
-        # _handle_confirm_transfer already had; its absence here was
-        # worse, because this branch writes a real reservation.
-        #
-        # So the reply is re-extracted first. If it moved any field, the
-        # new details get read back for confirmation instead of being
-        # booked silently; if it changed nothing, it's just a wordy yes
-        # or no and is treated as one.
-        if not _is_short_reply(normalized):
-            previous = context.reservation_draft
-            context.reservation_draft = await extract_reservation_fields(
-                self.llm,
-                self.restaurant.name,
-                context.reservation_draft,
-                message,
-                self.restaurant.timezone,
-                self._now(),
-            )
-            if context.reservation_draft != previous:
-                return self._advance_reservation_collection(context, acknowledge=True)
+        # A plain, short yes is the common case and the only one that
+        # needs nothing looked at: book it and skip the extraction call.
+        if _is_short_reply(normalized) and _reads_as(normalized) == "confirm":
+            return await self._book(context, call_sid)
+
+        # Everything else is re-extracted before being read as an answer,
+        # because a reply can carry a correction as well as a yes or no.
+        # "yes, but can you make it 8 instead" contains "yes", and
+        # reading only that books the time the caller was in the middle
+        # of correcting. So does "no, seven thirty" — which is short, and
+        # was being read as a bare "no" that threw the correction away
+        # and asked what they wanted to change. They had just said.
+        previous = context.reservation_draft
+        context.reservation_draft = await extract_reservation_fields(
+            self.llm,
+            self.restaurant.name,
+            context.reservation_draft,
+            message,
+            self.restaurant.timezone,
+            self._now(),
+        )
+        if context.reservation_draft != previous:
+            # Changed details are read back, never applied silently.
+            return self._advance_reservation_collection(context, acknowledge=True)
 
         reading = await self._read_yes_no(context, normalized)
 
         if reading == "confirm":
-            reservation = await create_reservation_request(self.db, self.restaurant, context.reservation_draft, call_sid)
-            context.state = ConversationState.IDENTIFY_INTENT
-            context.reservation_draft = ReservationDraft()
-            # Not "submitted" — that's software talking. But not
-            # "you're booked" either: this is a request the restaurant
-            # still has to confirm, and a caller who turns up thinking
-            # they have a table when they don't is the worst outcome
-            # this flow can produce.
-            # Remember it for the rest of THIS call. known_reservation was
-            # only ever filled at call start from past bookings, so a
-            # table booked two minutes ago was invisible: a real caller
-            # asked "can you remind me what was my booking?", then "no, I
-            # am asking for my current reservation that you booked", then
-            # "I'm asking for the reservation that I just made for
-            # tomorrow" — and was walked toward a fresh booking all three
-            # times, because as far as the engine knew they had none.
-            context.known_reservation = caller_service.describe_reservation(reservation)
-
-            reply = (
-                "Lovely, I've got that down. Someone will give you a quick call to confirm it. "
-                "Anything else I can help with?"
-            )
-            result = self._say(context, reply)
-            result.reservation = reservation
-            return result
+            return await self._book(context, call_sid)
 
         if reading == "deny":
             context.state = ConversationState.RESERVATION_COLLECTING
             return self._say(context, "No problem — what would you like to change?")
 
         return self._say(context, "Sorry, shall I go ahead and put that booking in?")
+
+    async def _book(
+        self, context: ConversationContext, call_sid: Optional[str]
+    ) -> TurnResult:
+        """Create the reservation the caller just agreed to."""
+        reservation = await create_reservation_request(
+            self.db, self.restaurant, context.reservation_draft, call_sid
+        )
+        context.state = ConversationState.IDENTIFY_INTENT
+        context.reservation_draft = ReservationDraft()
+
+        # Remember it for the rest of THIS call. known_reservation was
+        # only ever filled at call start from past bookings, so a table
+        # booked two minutes ago was invisible: a real caller asked "can
+        # you remind me what was my booking?", then "no, I am asking for
+        # my current reservation that you booked", then "I'm asking for
+        # the reservation that I just made for tomorrow" — and was walked
+        # toward a fresh booking all three times, because as far as the
+        # engine knew they had none.
+        context.known_reservation = caller_service.describe_reservation(reservation)
+
+        # Not "submitted" — that's software talking. But not "you're
+        # booked" either: this is a request the restaurant still has to
+        # confirm, and a caller who turns up thinking they have a table
+        # when they don't is the worst outcome this flow can produce.
+        result = self._say(
+            context,
+            "Lovely, I've got that down. Someone will give you a quick call to confirm it. "
+            "Anything else I can help with?",
+        )
+        result.reservation = reservation
+        return result
 
     # ------------------------------------------------------------------
     # Shared helpers

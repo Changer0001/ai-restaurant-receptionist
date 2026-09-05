@@ -1174,6 +1174,12 @@ async def test_the_yes_no_fixes_hold_for_a_second_restaurant(
             json.dumps({"customer_name": "Marco Rossi", "customer_phone": "555-987-6543",
                         "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
                         "party_size": 2, "special_notes": None}),
+            # A refusal is re-extracted before being read as one, since a
+            # short reply can carry a correction ("no, seven thirty").
+            # This one carries nothing, so it stays a plain refusal.
+            json.dumps({"customer_name": None, "customer_phone": None,
+                        "reservation_date": None, "reservation_time": None,
+                        "party_size": None, "special_notes": None}),
         ]
     )
     llm = ScriptedLLMProvider(

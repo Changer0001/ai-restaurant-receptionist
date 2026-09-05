@@ -98,10 +98,11 @@ async def generate_faq_answer(
         vector_db, embedder, restaurant_id, search_query or question
     )
 
-    # TEMPORARY debug logging — remove once it's confirmed FAQ questions
-    # (menu/parking/location) are finding grounded content.
-    logger.warning(
-        f"DEBUG generate_faq_answer: question={question!r} "
+    # Per-turn tracing. Set LOG_LEVEL=DEBUG to follow a live call
+    # decision by decision; off by default, because a line per turn
+    # at WARNING is what makes a real warning impossible to see.
+    logger.debug(
+        f"generate_faq_answer: question={question!r} "
         f"search_query={(search_query or question)!r} chunks_found={len(chunks)}"
     )
 

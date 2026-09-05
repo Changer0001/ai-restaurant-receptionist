@@ -35,9 +35,10 @@ async def classify_intent(
     raw = await llm.generate(prompt, temperature=0.0)
     cleaned = strip_thinking(raw)
 
-    # TEMPORARY debug logging — remove once it's confirmed FAQ questions
-    # (menu/parking/location) aren't being misclassified.
-    logger.warning(f"DEBUG classify_intent: message={latest_message!r} raw_llm_output={raw!r}")
+    # Per-turn tracing. Set LOG_LEVEL=DEBUG to follow a live call
+    # decision by decision; off by default, because a line per turn
+    # at WARNING is what makes a real warning impossible to see.
+    logger.debug(f"classify_intent: message={latest_message!r} raw={raw!r}")
 
     if not cleaned:
         return "UNCLEAR"

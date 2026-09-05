@@ -111,6 +111,17 @@ class ConversationContext:
     # booking has to be exactly right, so it's rendered once from real
     # data instead of being re-described by a model every time it's
     # mentioned.
+    # A specific offer the assistant just made and is waiting on — "did
+    # you want to hear about the specials?" — so a bare "yes" can be
+    # acted on instead of being read as an acknowledgement.
+    #
+    # Only set for offers with a topic. The closing question every
+    # smalltalk reply ends with ("anything else I can help with?") is
+    # deliberately NOT recorded here: "yes" to that means "I have
+    # another question", which is answered by inviting it, not by
+    # looking anything up. See _handle_identify_intent.
+    pending_question: Optional[str] = None
+
     caller_name: Optional[str] = None
     known_reservation: Optional[str] = None
     # The number they're calling from. Used to avoid asking a caller for
