@@ -455,3 +455,105 @@ async def test_a_call_where_nothing_was_answered_is_not_recorded_as_answered(
     await session.end()
     await db_session.commit()
     assert session.call.outcome == CallOutcomeEnum.CALL_ABANDONED
+
+
+# ----------------------------------------------------------------------
+# Audio too poor to act on
+#
+# Whisper always returns its best guess. A real call answered "Fiyopas."
+# (confidence 0.42) and "free of us" (0.41) with confident replies to
+# things the caller never said — the confidence was in the log the whole
+# time and nothing read it.
+# ----------------------------------------------------------------------
+
+
+async def test_a_low_confidence_transcript_is_not_acted_on(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    llm = ScriptedLLMProvider([], default="SHOULD_NOT_BE_CALLED")
+    stt = ScriptedSTTProvider([("Fiyopas.", 0.42)])
+    session, sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    # Nothing was classified, retrieved against, or answered.
+    assert llm.calls == []
+    # But the caller is asked again rather than met with silence.
+    assert len(sender.sent) >= 1
+    assert session.context.history[-1].role == "assistant"
+    assert session.context.history[-1].content.rstrip().endswith("?")
+
+
+async def test_a_confident_transcript_still_goes_through(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """The guard must not start rejecting ordinary speech — real short
+    replies on a phone line score around 0.5-0.6."""
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
+        ]
+    )
+    stt = ScriptedSTTProvider([("What time do you close tonight?", 0.58)])
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    assert llm.calls  # it was actually processed
+    assert session.final_outcome == CallOutcomeEnum.FAQ_ANSWERED
+
+
+async def test_repeated_unintelligible_audio_hands_over_to_a_person(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    A bad line or an accent this model can't follow shouldn't loop
+    forever. Three tries is a fair attempt; a fourth is where the caller
+    gives up on the whole system rather than on the connection.
+    """
+    llm = ScriptedLLMProvider([], default="SHOULD_NOT_BE_CALLED")
+    stt = ScriptedSTTProvider([("Fiyopas.", 0.42), ("free of us", 0.41), ("mmhm", 0.30)])
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    for _ in range(3):
+        await session._process_utterance()
+
+    assert session.should_close is True
+    assert session.final_outcome == CallOutcomeEnum.HUMAN_ESCALATION
+    assert session.context.state == ConversationState.TRANSFER_TO_HUMAN
+
+
+async def test_one_bad_turn_does_not_count_against_a_later_one(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """The counter is for a run of failures, not a tally across the call
+    — a single crackle early on must not push a later one to a transfer."""
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
+        ]
+    )
+    stt = ScriptedSTTProvider(
+        [("Fiyopas.", 0.42), ("What time do you close tonight?", 0.9), ("blorp", 0.30)]
+    )
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    for _ in range(3):
+        await session._process_utterance()
+
+    assert session.should_close is False
+    assert session._unheard_count == 1

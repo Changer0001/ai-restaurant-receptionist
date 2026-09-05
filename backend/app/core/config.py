@@ -143,6 +143,23 @@ class Settings(BaseSettings):
     # is wrong for this machine.
     WHISPER_CPU_THREADS: int = 0
 
+    # Below this confidence, a transcript is treated as "didn't catch
+    # that" rather than as something the caller said.
+    #
+    # Whisper always returns its best guess, however poor the audio, and
+    # that guess reaches the engine as though it were speech. On a real
+    # call it produced "Fiyopas." at 0.42 and "free of us" at 0.41 — both
+    # were classified, retrieved against, and answered, which is how a
+    # caller ends up hearing a confident reply to something they never
+    # said. The confidence was right there in the log and nothing used it.
+    #
+    # 0.45 sits below the 0.5-0.6 that real, correctly-transcribed short
+    # replies score on a phone line ("yes." came back at 0.58, "yeah" at
+    # 0.50) and above the 0.40-0.42 of the genuine nonsense. Raise it if
+    # callers are asked to repeat themselves too often; lower it if
+    # garbled text is still getting through.
+    STT_MIN_CONFIDENCE: float = 0.45
+
     # FALLBACK vocabulary hint passed to Whisper as its decoder prefix.
     # Whisper biases toward spellings it has just "seen", so listing the
     # words a caller is likely to say measurably improves them, at no

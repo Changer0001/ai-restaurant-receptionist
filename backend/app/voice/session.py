@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audio.codec import mulaw_to_pcm16, pcm16_to_mulaw, pcm16_to_wav_bytes, resample_linear
 from app.audio.vad import TurnDetector
 from app.conversation.engine import ConversationEngine, TurnResult
+from app.conversation.phrasing import pick
 from app.conversation.state import ConversationContext, ConversationState
 from app.core.config import settings
 from app.core.metrics import active_calls
@@ -141,6 +142,21 @@ def _has_speech(text: str) -> bool:
     return any(char.isalnum() for char in text)
 
 
+# Asked when the audio was too poor to trust. Several phrasings because
+# a bad line produces these back to back, and hearing the identical
+# sentence twice is what makes a caller start shouting at the phone.
+_DIDNT_CATCH_PROMPTS = (
+    "Sorry, I didn't catch that — could you say it again?",
+    "The line's not brilliant, sorry — could you repeat that?",
+    "I missed that one, sorry. Once more?",
+)
+
+# Consecutive unintelligible turns before handing to a person. Three
+# tries is a fair attempt at a bad line; a fourth is where a caller gives
+# up on the whole system rather than on the connection.
+_MAX_UNHEARD_BEFORE_TRANSFER = 3
+
+
 class CallSession:
     def __init__(
         self,
@@ -181,6 +197,9 @@ class CallSession:
         # active_calls, so end() only ever decrements a gauge this same
         # instance actually raised — see active_calls' own docstring.
         self._counted_active = False
+        # Consecutive turns too garbled to act on — see
+        # STT_MIN_CONFIDENCE. Reset by any turn we do understand.
+        self._unheard_count = 0
 
     async def start(self) -> None:
         """Called once the Media Stream is connected — plays the greeting."""
@@ -264,6 +283,38 @@ class CallSession:
             logger.warning(f"Discarding STT echo of the vocabulary prompt: {text!r}")
             return
 
+        # Whisper always returns its best guess, however poor the audio,
+        # and that guess used to reach the engine as though the caller
+        # had said it — a real call answered "Fiyopas." (0.42) and "free
+        # of us" (0.41) with confident replies to things nobody said.
+        # Asking is what a person does when they don't catch something.
+        if confidence < settings.STT_MIN_CONFIDENCE:
+            self._unheard_count += 1
+            logger.info(
+                f"Transcript below confidence threshold, asking again: "
+                f"{text!r} ({confidence:.2f} < {settings.STT_MIN_CONFIDENCE})"
+            )
+            # Three failures in a row is a bad line or an accent this
+            # model can't follow, and asking a fourth time is what makes
+            # a caller give up on the whole system. Hand them to a person
+            # while they're still willing to be handed.
+            if self._unheard_count >= _MAX_UNHEARD_BEFORE_TRANSFER:
+                await self._say_and_record(
+                    "I'm having real trouble hearing you — let me put you "
+                    "through to someone."
+                )
+                self.context.state = ConversationState.TRANSFER_TO_HUMAN
+                self.context.transfer_reason = "escalation"
+                self.final_outcome = CallOutcomeEnum.HUMAN_ESCALATION
+                self.should_close = True
+                return
+            await self._say_and_record(
+                pick(_DIDNT_CATCH_PROMPTS, self.context.last_assistant_text())
+            )
+            return
+
+        self._unheard_count = 0
+
         await call_service.append_transcript_turn(self.db, self.call, "caller", text, confidence)
 
         if settings.SPEAK_PROCESSING_FILLER:
@@ -323,6 +374,23 @@ class CallSession:
             # the honest version of this: answered_something is set where
             # a real answer is given, and nowhere else.
             self.final_outcome = CallOutcomeEnum.FAQ_ANSWERED
+
+    async def _say_and_record(self, text: str) -> None:
+        """
+        Speak a line the engine didn't produce, and put it in the record.
+
+        For turns the session itself owns — asking the caller to repeat
+        themselves, giving up on a bad line. Unlike _PROCESSING_FILLER
+        these are real conversational turns: the caller hears them and
+        answers them, so they belong in the transcript, and in
+        context.history where pick() can see them. Without that, the
+        three "didn't catch that" phrasings all look like the first one
+        and a caller on a bad line hears the identical sentence three
+        times over.
+        """
+        await call_service.append_transcript_turn(self.db, self.call, "assistant", text)
+        self.context.add_turn("assistant", text)
+        await self._speak(text)
 
     async def _speak(self, text: str) -> None:
         """

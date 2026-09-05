@@ -43,7 +43,7 @@ from app.db.models import Reservation, Restaurant
 from app.providers.embedding.base import EmbeddingProvider
 from app.providers.llm.base import LLMProvider
 from app.rag.vector_db import VectorDB
-from app.services import hours_service
+from app.services import caller_service, hours_service
 
 # Consecutive UNCLEAR-intent turns before escalating — one retry is
 # reasonable, two straight misses means the automated path isn't working
@@ -202,6 +202,7 @@ _OFFER_TRANSFER_PROMPTS = {
     "escalation": "I want to make sure you get the help you need — would you like me to connect you with a team member?",
     "repeated_unclear": "I'm having a hard time understanding — would you like me to connect you with a team member instead?",
     "unknown_answer": "I don't have that one in front of me, I'm afraid. Would you like me to connect you with someone at the restaurant who can tell you?",
+    "change_existing_reservation": "Changing or cancelling a booking isn't something I can do myself — shall I put you through to someone who can sort that out?",
 }
 
 
@@ -229,6 +230,37 @@ _EXISTING_RESERVATION_PHRASES = (
 def _asks_about_existing_reservation(message: str) -> bool:
     lowered = message.lower()
     return any(phrase in lowered for phrase in _EXISTING_RESERVATION_PHRASES)
+
+
+# Changing or cancelling a booking that already exists. The AI cannot do
+# either — nothing in the system cancels or amends a reservation — and
+# pretending otherwise is what happened on a real call: "Can I cancel
+# that reservation first?" and "I want to cancel it" were both
+# classified RESERVATION and answered by collecting a brand new booking,
+# so the caller ended up with a second table instead of none.
+#
+# The honest answer is a person. Kept as literal phrases rather than
+# another model call because the wording is narrow and the cost of
+# getting it wrong is a caller sent to a human they didn't need.
+_CANCEL_OR_CHANGE_PHRASES = (
+    "cancel",
+    "cancel it",
+    "cancel that",
+    "cancel my",
+    "call it off",
+    "move my",
+    "move it to",
+    "change my",
+    "change that",
+    "reschedule",
+    "push it back",
+    "make it later",
+    "make it earlier",
+)
+
+
+def _wants_to_change_a_booking(message: str) -> bool:
+    return _says_any_of(message, _CANCEL_OR_CHANGE_PHRASES)
 
 
 @dataclass
@@ -409,6 +441,16 @@ class ConversationEngine:
         if context.known_reservation and _asks_about_existing_reservation(message):
             context.answered_something = True
             return self._say(context, context.known_reservation)
+
+        # Cancelling or moving an existing booking is something this
+        # system genuinely cannot do — there is no code path that amends
+        # or deletes a reservation. On a real call "Can I cancel that
+        # reservation first?" was classified RESERVATION and answered by
+        # collecting a whole new booking, so a caller trying to cancel
+        # one table ended up holding two. Offer the person who can
+        # actually do it.
+        if _wants_to_change_a_booking(message):
+            return self._offer_transfer(context, "change_existing_reservation")
 
         if not self._collects_reservations():
             # Some restaurants have no booking system of their own to
@@ -598,6 +640,16 @@ class ConversationEngine:
             # still has to confirm, and a caller who turns up thinking
             # they have a table when they don't is the worst outcome
             # this flow can produce.
+            # Remember it for the rest of THIS call. known_reservation was
+            # only ever filled at call start from past bookings, so a
+            # table booked two minutes ago was invisible: a real caller
+            # asked "can you remind me what was my booking?", then "no, I
+            # am asking for my current reservation that you booked", then
+            # "I'm asking for the reservation that I just made for
+            # tomorrow" — and was walked toward a fresh booking all three
+            # times, because as far as the engine knew they had none.
+            context.known_reservation = caller_service.describe_reservation(reservation)
+
             reply = (
                 "Lovely, I've got that down. Someone will give you a quick call to confirm it. "
                 "Anything else I can help with?"

@@ -1294,3 +1294,97 @@ async def test_a_classifier_that_fails_never_books(
     assert result.reservation is None
     assert context.state == ConversationState.RESERVATION_CONFIRMING
     assert result.response_text.rstrip().endswith("?")
+
+
+# ----------------------------------------------------------------------
+# A booking the AI made on this same call
+# ----------------------------------------------------------------------
+
+
+async def test_a_reservation_made_on_this_call_can_be_read_back(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    known_reservation was only ever filled at call start from past
+    bookings, so a table booked two minutes earlier was invisible. A real
+    caller asked "can you remind me what was my booking?", then "no, I am
+    asking for my current reservation that you booked", then "I'm asking
+    for the reservation that I just made for tomorrow" — and was walked
+    toward a brand new booking all three times.
+    """
+    llm = _reservation_llm()
+    engine, context = await _at_confirmation(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+    booked = await engine.handle_turn(context, "yes please", call_sid="CA_readback")
+    assert booked.reservation is not None
+
+    result = await engine.handle_turn(context, "can you remind me what was my booking?")
+
+    assert "Jane Smith" in result.response_text
+    # Read back, not collected again.
+    assert context.state == ConversationState.IDENTIFY_INTENT
+    assert context.reservation_draft.missing_fields()
+
+
+# ----------------------------------------------------------------------
+# Cancelling or moving a booking
+# ----------------------------------------------------------------------
+
+
+async def test_cancelling_a_booking_offers_a_person_rather_than_booking_another(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    Nothing in this system cancels or amends a reservation. On a real
+    call "Can I cancel that reservation first?" and "I want to cancel it"
+    were both classified RESERVATION and answered by collecting a whole
+    new booking — so a caller trying to cancel one table was on their way
+    to holding two.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), "SHOULD_NOT_BE_CALLED"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    result = await engine.handle_turn(context, "I want to cancel it")
+
+    assert context.state == ConversationState.CONFIRM_TRANSFER
+    assert context.transfer_reason == "change_existing_reservation"
+    assert not any("Extract reservation details" in call for call in llm.calls)
+    assert "cancel" in result.response_text.lower()
+
+
+async def test_moving_a_booking_also_offers_a_person(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), "SHOULD_NOT_BE_CALLED"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "can I reschedule my table")
+
+    assert context.transfer_reason == "change_existing_reservation"
+
+
+async def test_making_a_new_booking_is_not_mistaken_for_changing_one(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """The guard must not swallow ordinary new bookings — that would take
+    the reservation flow away from every restaurant that wants it."""
+    llm = _reservation_llm()
+    engine, context = await _at_confirmation(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
