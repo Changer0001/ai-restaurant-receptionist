@@ -15,6 +15,8 @@ import asyncio
 import base64
 
 import numpy as np
+import pytest
+from starlette.websockets import WebSocketDisconnect
 
 from app.api.endpoints.twilio_webhooks import _get_telephony_provider
 from app.audio.codec import pcm16_to_mulaw
@@ -42,11 +44,9 @@ def _silence_mulaw_frame() -> str:
 
 
 async def _create_call_via_voice_webhook(client, db_session, restaurant) -> str:
-    # A short greeting keeps the synthesized playback window (and hence
-    # CallSession's no-barge-in "still speaking" gate, which is driven by
-    # real wall-clock time) small enough that the test's own frame-sending
-    # loop below can clear it with a short, deterministic sleep rather
-    # than a multi-second one.
+    # A short greeting keeps the synthesized playback window (driven by
+    # real wall-clock time) small enough that the test can wait it out
+    # with a short, deterministic sleep rather than a multi-second one.
     restaurant.ai_greeting = "Hi!"
     db_session.add(
         RestaurantPhoneNumber(
@@ -101,26 +101,36 @@ async def test_full_call_over_websocket_faq_question(
         assert greeting_audio["streamSid"] == "MZ123"
         assert len(greeting_audio["media"]["payload"]) > 0
 
-        # CallSession has no barge-in support: it ignores inbound audio
-        # until its estimated greeting-playback window (real wall-clock
-        # time, computed from the synthesized audio's own duration) has
-        # elapsed. Twilio would naturally take this long to stream the
-        # frames below in a real call; here we simulate that elapsed time
-        # with a short sleep instead, since the frames are sent back-to-
-        # back with no pacing of their own.
+        # Let the greeting's estimated playback window elapse. Frames
+        # arriving during it are judged by the barge-in detector, not the
+        # turn detector, and the quiet frames below would never clear its
+        # bar. Twilio paces frames 20ms apart so this time passes
+        # naturally on a real call; the test sends them back-to-back, so
+        # it waits explicitly instead.
         await asyncio.sleep(0.5)
 
         # Speech, then enough silence to trip the turn detector's default
         # hangover window.
         for _ in range(10):
             ws.send_json({"event": "media", "media": {"payload": _speech_mulaw_frame()}})
-        for _ in range(40):  # 40 * 20ms = 800ms > default 700ms hangover
+        for _ in range(40):  # 40 * 20ms = 800ms > the silence hangover
             ws.send_json({"event": "media", "media": {"payload": _silence_mulaw_frame()}})
 
         response_audio = ws.receive_json()
         assert response_audio["event"] == "media"
 
         ws.send_json({"event": "stop"})
+
+        # Wait for the server to actually close rather than assuming it
+        # has. On "stop" the handler breaks its loop and then, in its
+        # finally, finalizes the Call and commits — all on TestClient's
+        # portal thread. Leaving the `with` block races that teardown, so
+        # the assertions below would read the row before it was written
+        # and see outcome=UNKNOWN. The close frame arrives only after the
+        # commit, which makes waiting for it the one synchronization
+        # point that actually means "the server is finished".
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
 
     from sqlalchemy import select
 

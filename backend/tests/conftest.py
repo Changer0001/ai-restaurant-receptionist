@@ -7,6 +7,7 @@ never against the real Postgres configured in .env. The FastAPI
 `get_db_session` dependency is overridden accordingly.
 """
 
+import sqlite3
 import uuid
 
 import chromadb
@@ -46,15 +47,44 @@ def _disable_processing_filler(monkeypatch):
 
 @pytest_asyncio.fixture
 async def db_engine():
+    """
+    A per-test in-memory database that survives a pool reconnect.
+
+    Two things conspire against the obvious ":memory:" setup, and only
+    the websocket tests trip them — which is why one test failed while
+    350 passed, and why it looked for a long time like an unfixable
+    environmental flake.
+
+    First, a bare ":memory:" gives each CONNECTION its own database.
+    StaticPool normally hides that by holding exactly one, but it
+    transparently RECONNECTS when that connection is invalidated, and
+    TestClient driving the app from a second thread with its own event
+    loop does invalidate it. The reconnect lands in a fresh, empty
+    database and the next query fails with "no such table: calls".
+
+    A named shared-cache database fixes that much — but only while at
+    least one connection to it is open. The invalidation closes the only
+    one, destroying the database before the reconnect can reopen it. So
+    an anchor connection is held for the fixture's lifetime, using the
+    stdlib driver so it is genuinely independent of the pool.
+    """
+    name = f"testdb_{uuid.uuid4().hex}"
+    uri = f"file:{name}?mode=memory&cache=shared"
+
+    anchor = sqlite3.connect(uri, uri=True, check_same_thread=False)
+
     engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
+        f"sqlite+aiosqlite:///{uri}&uri=true",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+        anchor.close()
 
 
 @pytest_asyncio.fixture

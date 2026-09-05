@@ -732,3 +732,96 @@ async def test_a_turn_does_not_block_the_audio_loop(
 
     assert session._turn_in_flight(), "the turn should still be running in the background"
     await session._turn_task
+
+
+# ----------------------------------------------------------------------
+# The caller hanging up mid-reply
+#
+# A real call ended with websockets.exceptions.ConnectionClosedOK
+# escaping as an unhandled ERROR with a full stack trace. Hanging up
+# mid-sentence is how most calls end — reporting it as a fault buries
+# the failures that are real.
+# ----------------------------------------------------------------------
+
+
+class _HangingUpSender:
+    """The caller is already gone by the time we try to send."""
+
+    def __init__(self):
+        self.sent: list[bytes] = []
+
+    async def __call__(self, mulaw_bytes: bytes) -> None:
+        from app.voice.session import CallDisconnected
+
+        raise CallDisconnected()
+
+
+async def test_a_hangup_mid_reply_ends_the_call_without_an_error(
+    db_session, restaurant, vector_db, embedding_provider, caplog
+):
+    import logging
+
+    from app.voice.session import CallDisconnected
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
+        ]
+    )
+    stt = ScriptedSTTProvider([("What time do you close tonight?", 0.9)])
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_hangup", "+15551234567", restaurant.phone_number
+    )
+    sender = _HangingUpSender()
+    session = CallSession(
+        db_session, call, restaurant, stt, FakeTTSProvider(), llm,
+        embedding_provider, vector_db, sender,
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    with caplog.at_level(logging.INFO):
+        await session._run_turn()
+
+    # The call winds down; nothing is logged as an error.
+    assert session.should_close is True
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("hung up" in r.message.lower() for r in caplog.records)
+
+    # And _speak really does propagate it rather than swallowing it.
+    session2 = CallSession(
+        db_session, call, restaurant, stt, FakeTTSProvider(), llm,
+        embedding_provider, vector_db, _HangingUpSender(),
+    )
+    import pytest
+
+    with pytest.raises(CallDisconnected):
+        await session2._speak("One sentence here. And a second one. And a third one too.")
+
+
+async def test_a_genuine_turn_failure_is_still_reported(
+    db_session, restaurant, vector_db, embedding_provider, caplog
+):
+    """Treating a hangup as routine must not silence real bugs."""
+    import logging
+
+    class _BrokenSTT(ScriptedSTTProvider):
+        async def transcribe(self, audio, vocabulary=None):
+            raise ValueError("something is genuinely wrong")
+
+    llm = ScriptedLLMProvider([], default="FAQ")
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_broken", "+15551234567", restaurant.phone_number
+    )
+    session = CallSession(
+        db_session, call, restaurant, _BrokenSTT([]), FakeTTSProvider(), llm,
+        embedding_provider, vector_db, _RecordingSender(),
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    with caplog.at_level(logging.INFO):
+        await session._run_turn()
+
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR]
+    # The line stays open — one bad turn is not a reason to hang up on them.
+    assert session.should_close is False

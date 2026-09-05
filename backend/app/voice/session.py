@@ -80,6 +80,18 @@ _PLAYBACK_TAIL_BUFFER_S = 0.2
 # conversational exchange the engine or a human reviewer should see.
 _PROCESSING_FILLER = "One moment, let me check on that for you."
 
+class CallDisconnected(Exception):
+    """
+    The caller hung up while we were still sending audio.
+
+    Raised by the transport callbacks rather than letting the underlying
+    WebSocket error escape, because a hangup is a normal way for a phone
+    call to end, not a fault. Left unhandled it surfaced as an ERROR with
+    a full stack trace every time someone hung up mid-sentence — which is
+    most calls — burying the failures that are real.
+    """
+
+
 SendAudio = Callable[[bytes], Awaitable[None]]
 # Tells the telephony provider to throw away audio it has buffered
 # but not yet played. Without it, interrupting the assistant is
@@ -333,6 +345,13 @@ class CallSession:
             await self.db.commit()
         except asyncio.CancelledError:
             raise
+        except CallDisconnected:
+            # Not a fault. Someone hung up mid-reply, which is how most
+            # calls end. Keep whatever the turn managed to record and let
+            # the read loop wind the call down.
+            logger.info("Caller hung up mid-reply; ending the call")
+            self.should_close = True
+            await self.db.commit()
         except Exception:
             logger.exception("Turn failed; the caller is still on the line")
             await self.db.rollback()

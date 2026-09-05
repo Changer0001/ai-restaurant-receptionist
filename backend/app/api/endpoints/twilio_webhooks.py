@@ -21,6 +21,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
+from websockets.exceptions import ConnectionClosed
 
 from app.core.metrics import twilio_signature_failures_total
 from app.db.session import get_db_session
@@ -40,7 +41,7 @@ from app.providers.tts import get_tts_provider
 from app.providers.tts.base import TTSProvider
 from app.rag.vector_db import VectorDB, get_vector_db
 from app.services import call_service, restaurant_service
-from app.voice.session import CallSession
+from app.voice.session import CallDisconnected, CallSession, ClearAudio, SendAudio
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,57 @@ async def transfer_webhook(
     )
 
 
+# The three layers that can be first to notice the socket is gone:
+# websockets (the protocol library), starlette (which raises RuntimeError
+# once a close has been sent), and FastAPI's own disconnect signal.
+_SOCKET_CLOSED = (ConnectionClosed, WebSocketDisconnect, RuntimeError)
+
+
+def _audio_transport(
+    websocket: WebSocket, stream_sid_ref: list
+) -> tuple[SendAudio, ClearAudio]:
+    """
+    The two ways this call writes audio to Twilio.
+
+    Both translate a closed socket into CallDisconnected. A hangup can
+    land between any two audio chunks, and letting the raw WebSocket
+    error escape reported the most ordinary way a call ends as an
+    unhandled ERROR with a stack trace.
+
+    stream_sid_ref is a single-item list, not a value: the stream SID
+    arrives with the "start" event, after these are built.
+    """
+
+    async def send_audio(mulaw_bytes: bytes) -> None:
+        try:
+            await websocket.send_json(
+                {
+                    "event": "media",
+                    "streamSid": stream_sid_ref[0],
+                    "media": {"payload": base64.b64encode(mulaw_bytes).decode("ascii")},
+                }
+            )
+        except _SOCKET_CLOSED as exc:
+            raise CallDisconnected from exc
+
+    async def clear_audio() -> None:
+        """
+        Discard audio Twilio has buffered but not yet played.
+
+        The whole reply is handed to Twilio as fast as it synthesizes, so
+        by the time a caller interrupts, seconds of speech they haven't
+        heard yet are already sitting in Twilio's buffer. Stopping our
+        own sending does nothing about those — this is what actually
+        makes the assistant stop talking.
+        """
+        try:
+            await websocket.send_json({"event": "clear", "streamSid": stream_sid_ref[0]})
+        except _SOCKET_CLOSED as exc:
+            raise CallDisconnected from exc
+
+    return send_audio, clear_audio
+
+
 async def _handle_stream_event(
     session: CallSession, db: AsyncSession, message: dict, stream_sid_ref: list
 ) -> bool:
@@ -286,26 +338,7 @@ async def media_stream(
     # assigned, inside _handle_stream_event) after send_audio is defined.
     stream_sid_ref: list[str | None] = [None]
 
-    async def send_audio(mulaw_bytes: bytes) -> None:
-        await websocket.send_json(
-            {
-                "event": "media",
-                "streamSid": stream_sid_ref[0],
-                "media": {"payload": base64.b64encode(mulaw_bytes).decode("ascii")},
-            }
-        )
-
-    async def clear_audio() -> None:
-        """
-        Discard audio Twilio has buffered but not yet played.
-
-        The whole reply is handed to Twilio as fast as it synthesizes, so
-        by the time a caller interrupts, seconds of speech they haven't
-        heard yet are already sitting in Twilio's buffer. Stopping our
-        own sending does nothing about those — this is what actually
-        makes the assistant stop talking.
-        """
-        await websocket.send_json({"event": "clear", "streamSid": stream_sid_ref[0]})
+    send_audio, clear_audio = _audio_transport(websocket, stream_sid_ref)
 
     session = CallSession(
         db,
