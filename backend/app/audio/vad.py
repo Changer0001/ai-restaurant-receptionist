@@ -94,3 +94,75 @@ class TurnDetector:
         )
         self.reset()
         return audio
+
+
+@dataclass
+class BargeInConfig:
+    sample_rate: int = 8000
+    # Deliberately higher than TurnDetectorConfig.energy_threshold.
+    # This runs while the assistant is talking, when the inbound leg can
+    # carry acoustic echo of our own voice from a speakerphone or a
+    # handset held loosely. Interrupting the assistant over its own echo
+    # is worse than not interrupting at all, so the bar to cut it off is
+    # higher than the bar to hear someone in silence.
+    energy_threshold: float = 900.0
+    # Sustained speech required before it counts as an interruption.
+    # A cough, a door, a burst of line noise are all short; someone
+    # actually starting to talk is not. This is the single most important
+    # number here — too low and the assistant gets cut off constantly by
+    # nothing, which is a worse call than having no barge-in at all.
+    speech_ms: int = 300
+
+
+class BargeInDetector:
+    """
+    Whether the caller has started talking over the assistant.
+
+    Separate from TurnDetector, and stricter, because the two questions
+    are genuinely different. TurnDetector asks "has the caller finished?"
+    in silence, where being generous costs nothing. This asks "should I
+    stop talking?" during playback, where a false positive cuts the
+    assistant off mid-sentence for a noise nobody made.
+
+    Frames are held rather than discarded: the words that prove someone
+    is speaking are the first words of what they're saying, and throwing
+    them away means the caller's "actually, can you..." arrives at
+    transcription with its opening missing.
+    """
+
+    def __init__(self, config: BargeInConfig | None = None):
+        self.config = config or BargeInConfig()
+        self._frames: list[np.ndarray] = []
+        self._speech_ms: float = 0.0
+
+    def reset(self) -> None:
+        self._frames = []
+        self._speech_ms = 0.0
+
+    def add_frame(self, frame: np.ndarray) -> bool:
+        """
+        Feed one frame captured while the assistant is speaking. Returns
+        True once the caller has been talking long enough to count.
+        """
+        if not len(frame):
+            return False
+
+        frame_ms = len(frame) / self.config.sample_rate * 1000
+        energy = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+
+        if energy >= self.config.energy_threshold:
+            self._frames.append(frame)
+            self._speech_ms += frame_ms
+        else:
+            # Must be CONTINUOUS. A run broken by quiet is noise, not
+            # someone talking — without this, scattered clicks across a
+            # long reply would eventually add up to a false interruption.
+            self.reset()
+
+        return self._speech_ms >= self.config.speech_ms
+
+    def pop_frames(self) -> list[np.ndarray]:
+        """The held frames, to be replayed into the turn detector."""
+        frames = self._frames
+        self.reset()
+        return frames

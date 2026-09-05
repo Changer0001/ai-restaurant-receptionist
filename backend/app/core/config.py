@@ -374,6 +374,16 @@ class Settings(BaseSettings):
     # ========================================================================
     FEATURE_CALL_RECORDING: bool = True
     FEATURE_CALL_TRANSFER: bool = True
+    # Whether a caller talking over the assistant cuts it off.
+    #
+    # On by default: not interrupting is one of the most obviously
+    # machine-like things a phone system does, and a caller who has heard
+    # enough of an answer has no way to say so. Turn it off if a
+    # particular line's audio causes false interruptions that tuning
+    # BargeInDetector's thresholds can't fix — a call where the assistant
+    # is cut off by nothing is worse than one where it can't be
+    # interrupted at all.
+    FEATURE_BARGE_IN: bool = True
     # True: the AI collects reservation details itself (name, phone,
     # date, time, party size) and creates a real pending Reservation
     # row — for a restaurant whose staff actually checks and confirms

@@ -87,11 +87,15 @@ async def test_start_uses_custom_ai_greeting(db_session, restaurant, vector_db, 
     assert session.context.history[0].content == "Welcome to our custom greeting!"
 
 
-async def test_handle_media_ignores_audio_while_speaking(
+async def test_quiet_audio_while_speaking_does_not_start_a_turn(
     db_session, restaurant, vector_db, embedding_provider
 ):
-    """No barge-in: while _speaking_until is in the future, incoming
-    audio must not reach the turn detector at all."""
+    """
+    While the assistant is speaking, audio below the barge-in bar must
+    not reach the turn detector — it's line noise, or echo of our own
+    voice. Only sustained speech interrupts (see the barge-in tests at
+    the bottom of this file).
+    """
     llm = ScriptedLLMProvider([], default="FAQ")
     stt = ScriptedSTTProvider([("should not be called", 0.9)])
     session, _sender = await _make_session(
@@ -557,3 +561,174 @@ async def test_one_bad_turn_does_not_count_against_a_later_one(
 
     assert session.should_close is False
     assert session._unheard_count == 1
+
+
+# ----------------------------------------------------------------------
+# Barge-in
+# ----------------------------------------------------------------------
+
+
+def _payload(amplitude: int, samples: int = 160) -> str:
+    """One 20ms Twilio media payload at the given amplitude."""
+    from app.audio.codec import pcm16_to_mulaw
+
+    pcm = np.full(samples, amplitude, dtype=np.int16)
+    return base64.b64encode(pcm16_to_mulaw(pcm)).decode("ascii")
+
+
+class _ClearRecorder:
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self) -> None:
+        self.calls += 1
+
+
+async def _speaking_session(db_session, restaurant, vector_db, embedding_provider, stt=None):
+    llm = ScriptedLLMProvider([], default="FAQ")
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_barge", "+15551234567", restaurant.phone_number
+    )
+    sender = _RecordingSender()
+    clearer = _ClearRecorder()
+    session = CallSession(
+        db_session, call, restaurant,
+        stt or ScriptedSTTProvider([]), FakeTTSProvider(), llm,
+        embedding_provider, vector_db, sender, None, clearer,
+    )
+    import time
+
+    session._speaking_until = time.monotonic() + 60  # mid-reply
+    return session, sender, clearer
+
+
+async def test_talking_over_the_assistant_stops_it(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    session, _sender, clearer = await _speaking_session(
+        db_session, restaurant, vector_db, embedding_provider
+    )
+
+    for _ in range(20):  # 400ms of speech, over the 300ms bar
+        await session.handle_media(_payload(6000))
+
+    assert clearer.calls == 1, "Twilio must be told to drop the buffered reply"
+    assert session._interrupted is True
+    assert session._is_speaking() is False  # listening again immediately
+
+
+async def test_the_interrupted_words_are_kept_for_transcription(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """The frames that proved someone was talking are the start of what
+    they said — they belong to the utterance, not to the detector."""
+    session, _sender, _clearer = await _speaking_session(
+        db_session, restaurant, vector_db, embedding_provider
+    )
+
+    for _ in range(20):
+        await session.handle_media(_payload(6000))
+
+    assert len(session.turn_detector.pop_utterance()) > 0
+
+
+async def test_line_noise_does_not_interrupt_the_assistant(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """A false interruption is a worse call than no barge-in at all."""
+    session, _sender, clearer = await _speaking_session(
+        db_session, restaurant, vector_db, embedding_provider
+    )
+
+    for _ in range(200):  # four seconds of quiet line
+        await session.handle_media(_payload(150))
+
+    assert clearer.calls == 0
+    assert session._interrupted is False
+    assert session._is_speaking() is True
+
+
+async def test_barge_in_can_be_turned_off(
+    db_session, restaurant, vector_db, embedding_provider, monkeypatch
+):
+    """A line whose audio causes false interruptions needs an off switch
+    that doesn't require a code change."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "FEATURE_BARGE_IN", False)
+    session, _sender, clearer = await _speaking_session(
+        db_session, restaurant, vector_db, embedding_provider
+    )
+
+    for _ in range(40):
+        await session.handle_media(_payload(6000))
+
+    assert clearer.calls == 0
+    assert session._is_speaking() is True
+
+
+async def test_speaking_stops_at_the_next_sentence_once_interrupted(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    Replies are synthesized and sent a sentence at a time, so an
+    interruption must stop the ones not yet sent — and must not pay to
+    synthesize them either.
+    """
+
+    class _InterruptingTTS(FakeTTSProvider):
+        def __init__(self, session_holder):
+            super().__init__()
+            self.holder = session_holder
+            self.synthesized: list[str] = []
+
+        async def synthesize(self, text: str):
+            self.synthesized.append(text)
+            # The caller starts talking while the first sentence plays.
+            self.holder[0]._interrupted = True
+            return await super().synthesize(text)
+
+    holder: list = [None]
+    llm = ScriptedLLMProvider([], default="FAQ")
+    call = await call_service.create_call(
+        db_session, restaurant.id, "CA_cut", "+15551234567", restaurant.phone_number
+    )
+    sender = _RecordingSender()
+    tts = _InterruptingTTS(holder)
+    session = CallSession(
+        db_session, call, restaurant, ScriptedSTTProvider([]), tts, llm,
+        embedding_provider, vector_db, sender, None, _ClearRecorder(),
+    )
+    holder[0] = session
+
+    await session._speak(
+        "Here is the first sentence. Here is the second one. And here is a third."
+    )
+
+    assert len(tts.synthesized) == 1, "must not synthesize what nobody will hear"
+    assert len(sender.sent) == 0, "the interrupted sentence is not sent either"
+
+
+async def test_a_turn_does_not_block_the_audio_loop(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    handle_media must return without awaiting the turn. Twilio delivers a
+    frame every 20ms down the same socket, so a handler that waits for
+    the whole turn reads no audio while the assistant speaks — which is
+    what made barge-in impossible.
+    """
+    stt = ScriptedSTTProvider([("What time do you close tonight?", 0.9)])
+    session, _sender, _clearer = await _speaking_session(
+        db_session, restaurant, vector_db, embedding_provider, stt
+    )
+    session._speaking_until = 0.0  # idle, listening
+
+    # Speech, then enough silence to end the turn.
+    for _ in range(20):
+        await session.handle_media(_payload(6000))
+    for _ in range(40):
+        await session.handle_media(_payload(0))
+
+    assert session._turn_in_flight(), "the turn should still be running in the background"
+    await session._turn_task

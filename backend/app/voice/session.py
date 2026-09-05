@@ -6,18 +6,31 @@ when they've finished a turn, running STT -> conversation engine -> TTS,
 and streaming the response back. One instance per call, created when the
 Media Streams WebSocket connects and discarded when it disconnects.
 
-Turn-taking is strictly alternating — the caller speaks, the engine
-responds fully, then the caller speaks again. There is no barge-in
-(interrupting the AI mid-response): while audio is being played back to
-the caller, incoming audio is intentionally ignored rather than treated
-as a new utterance, using an estimated "speaking until" timestamp
-computed from the outgoing audio's own duration. Twilio's Media Streams
-`mark` event is the protocol-native way to get an exact "playback
-actually finished" signal from Twilio itself rather than estimating it;
-using the estimate is a deliberate, simpler scope-down for this MVP —
-see docs/roadmap.md.
+Turn-taking supports barge-in: a caller who starts talking over the
+assistant cuts it off, the way interrupting a person does. That needs
+three things that are easy to get individually wrong.
+
+The turn runs as its own task rather than being awaited by the WebSocket
+read loop. Twilio delivers a frame every 20ms down the same socket, so a
+loop that awaits the whole turn reads no audio while the assistant is
+speaking — the caller could interrupt, but nothing was listening.
+
+The reply is already inside Twilio when we stop sending it, so stopping
+the send loop alone changes nothing the caller hears. The Media Streams
+`clear` event is what actually silences it.
+
+And the bar for "the caller is talking" is set higher during playback
+than in silence (see BargeInDetector), because a false interruption —
+the assistant cut off by a cough or by echo of its own voice — makes for
+a worse call than no barge-in at all.
+
+While speaking, playback position is still an estimate computed from the
+outgoing audio's own duration. Twilio's `mark` event is the
+protocol-native way to know playback actually finished; the estimate is
+a deliberate scope-down — see docs/roadmap.md.
 """
 
+import asyncio
 import base64
 import logging
 import re
@@ -28,7 +41,7 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audio.codec import mulaw_to_pcm16, pcm16_to_mulaw, pcm16_to_wav_bytes, resample_linear
-from app.audio.vad import TurnDetector
+from app.audio.vad import BargeInDetector, TurnDetector
 from app.conversation.engine import ConversationEngine, TurnResult
 from app.conversation.phrasing import pick
 from app.conversation.state import ConversationContext, ConversationState
@@ -68,6 +81,10 @@ _PLAYBACK_TAIL_BUFFER_S = 0.2
 _PROCESSING_FILLER = "One moment, let me check on that for you."
 
 SendAudio = Callable[[bytes], Awaitable[None]]
+# Tells the telephony provider to throw away audio it has buffered
+# but not yet played. Without it, interrupting the assistant is
+# impossible: the whole reply is already on its way to the caller.
+ClearAudio = Callable[[], Awaitable[None]]
 
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
@@ -170,6 +187,7 @@ class CallSession:
         vector_db: VectorDB,
         send_audio: SendAudio,
         classifier_llm: Optional[LLMProvider] = None,
+        clear_audio: Optional[ClearAudio] = None,
     ):
         self.db = db
         self.call = call
@@ -177,6 +195,7 @@ class CallSession:
         self.stt = stt
         self.tts = tts
         self.send_audio = send_audio
+        self.clear_audio = clear_audio
 
         self.engine = ConversationEngine(
             llm, embedder, vector_db, db, restaurant, classifier_llm=classifier_llm
@@ -189,6 +208,8 @@ class CallSession:
         # deployment default when they haven't been configured.
         self._vocabulary = restaurant.stt_vocabulary or settings.STT_INITIAL_PROMPT
         self.turn_detector = TurnDetector()
+        # Only consulted while the assistant is speaking.
+        self._barge_in = BargeInDetector()
 
         self.final_outcome = CallOutcomeEnum.UNKNOWN
         self.should_close = False  # set True once a transfer is needed
@@ -200,6 +221,12 @@ class CallSession:
         # Consecutive turns too garbled to act on — see
         # STT_MIN_CONFIDENCE. Reset by any turn we do understand.
         self._unheard_count = 0
+        # The in-flight turn, so a second one can't start on top of
+        # it and so an ending call can cancel it.
+        self._turn_task: Optional[asyncio.Task] = None
+        # Set by _interrupt when the caller talks over us; read by
+        # _speak between chunks.
+        self._interrupted = False
 
     async def start(self) -> None:
         """Called once the Media Stream is connected — plays the greeting."""
@@ -244,16 +271,87 @@ class CallSession:
         self.context.add_turn("assistant", greeting)
         await self._speak(greeting)
 
-    async def handle_media(self, payload_b64: str) -> None:
-        """Handle one inbound `media` event's base64 μ-law payload."""
-        if time.monotonic() < self._speaking_until:
-            return  # still playing our own response — no barge-in support
+    def _is_speaking(self) -> bool:
+        return time.monotonic() < self._speaking_until
 
+    def _turn_in_flight(self) -> bool:
+        return self._turn_task is not None and not self._turn_task.done()
+
+    async def handle_media(self, payload_b64: str) -> None:
+        """
+        Handle one inbound `media` event's base64 μ-law payload.
+
+        Deliberately does NOT await the turn it starts. Twilio delivers a
+        frame every 20ms down the same WebSocket this returns to, so
+        anything awaited here stops the audio being read at all — which
+        is why barge-in was impossible before: the caller could talk over
+        the assistant, but nothing was listening until it had finished.
+        The turn runs as its own task and this returns immediately.
+        """
         mulaw_bytes = base64.b64decode(payload_b64)
         frame = mulaw_to_pcm16(mulaw_bytes)
 
+        if self._is_speaking():
+            if not settings.FEATURE_BARGE_IN:
+                return
+            if not self._barge_in.add_frame(frame):
+                return
+            await self._interrupt()
+            # The frames that proved someone was talking are the opening
+            # of what they said. Replaying them into the turn detector is
+            # what keeps "actually, can you..." from arriving at
+            # transcription with its first word missing.
+            for held in self._barge_in.pop_frames():
+                self.turn_detector.add_frame(held)
+            return
+
+        # Mid-turn — transcribing, thinking, or about to speak. Starting
+        # a second turn on top of the first would have two of them
+        # writing to the same conversation and the same DB session.
+        if self._turn_in_flight():
+            return
+
         if self.turn_detector.add_frame(frame):
+            self._turn_task = asyncio.create_task(self._run_turn())
+
+    async def _run_turn(self) -> None:
+        """
+        One turn, with the bookkeeping a detached task needs.
+
+        The commit lives here because the read loop no longer does it:
+        this is where writes actually happen, once per turn rather than
+        once per 20ms audio frame.
+
+        The except clause is not defensive padding. An exception inside a
+        task nobody awaits is swallowed by asyncio, and the caller's
+        experience of that is a line that simply goes quiet — they wait,
+        hear nothing, hang up, and the log looks clean. Better to say so
+        loudly and leave the call standing.
+        """
+        try:
             await self._process_utterance()
+            await self.db.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Turn failed; the caller is still on the line")
+            await self.db.rollback()
+
+    async def _interrupt(self) -> None:
+        """
+        Stop talking, because the caller has started.
+
+        Two things have to happen, and the second is the one that isn't
+        obvious: the reply was already handed to Twilio in full, and
+        Twilio is playing it out of its own buffer. Stopping our sending
+        loop does nothing to audio that has already left. The `clear`
+        event is what actually makes the assistant go quiet.
+        """
+        self._interrupted = True
+        self._speaking_until = 0.0
+        logger.info("Caller started talking over the assistant — stopping playback")
+        if self.clear_audio is not None:
+            await self.clear_audio()
 
     async def _process_utterance(self) -> None:
         pcm_8k = self.turn_detector.pop_utterance()
@@ -416,11 +514,19 @@ class CallSession:
         # what stops the caller's own audio being processed as a new
         # utterance while the assistant is still talking.
         playback_ends_at = time.monotonic()
+        self._interrupted = False
+        self._barge_in.reset()
 
         # Rewrite into spoken form first — before splitting, since this
         # removes the decimal points in prices that would otherwise look
         # like sentence boundaries.
         for sentence in _split_into_speakable_chunks(to_spoken(text)):
+            # Checked before synthesizing as well as before sending:
+            # synthesis is the expensive part, and a caller who has
+            # already interrupted is not going to hear it.
+            if self._interrupted:
+                logger.info("Reply cut short by the caller: %r", sentence[:40])
+                return
             pcm_bytes, native_rate = await self.tts.synthesize(sentence)
             if not pcm_bytes:
                 continue
@@ -431,6 +537,9 @@ class CallSession:
 
             # μ-law is exactly 1 byte per sample at the target rate, so
             # this is the actual playback duration, not an approximation.
+            if self._interrupted:
+                return
+
             duration_s = len(mulaw_bytes) / _TWILIO_SAMPLE_RATE
             playback_ends_at = max(playback_ends_at, time.monotonic()) + duration_s
             self._speaking_until = playback_ends_at + _PLAYBACK_TAIL_BUFFER_S
@@ -439,6 +548,18 @@ class CallSession:
 
     async def end(self) -> None:
         """Called once the Media Stream disconnects — finalizes the Call record."""
+        # A turn still running when the caller hangs up has nobody left
+        # to talk to, and it shares this DB session with the finalize
+        # below — letting both touch it at once is how a hangup mid-reply
+        # corrupts the call record it was trying to write.
+        if self._turn_in_flight():
+            assert self._turn_task is not None
+            self._turn_task.cancel()
+            try:
+                await self._turn_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         transcript_text = "\n".join(f"{t.role}: {t.content}" for t in self.context.history)
 
         outcome = self.final_outcome

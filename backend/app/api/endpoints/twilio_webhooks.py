@@ -235,8 +235,11 @@ async def _handle_stream_event(
         return False
 
     if event == "media":
+        # No commit here. This fires every 20ms — fifty commits a second
+        # for audio frames, almost none of which change anything. The
+        # turn task commits its own work when it finishes, which is where
+        # the writes actually happen.
         await session.handle_media(message["media"]["payload"])
-        await db.commit()
         return session.should_close
 
     return event == "stop"
@@ -292,8 +295,30 @@ async def media_stream(
             }
         )
 
+    async def clear_audio() -> None:
+        """
+        Discard audio Twilio has buffered but not yet played.
+
+        The whole reply is handed to Twilio as fast as it synthesizes, so
+        by the time a caller interrupts, seconds of speech they haven't
+        heard yet are already sitting in Twilio's buffer. Stopping our
+        own sending does nothing about those — this is what actually
+        makes the assistant stop talking.
+        """
+        await websocket.send_json({"event": "clear", "streamSid": stream_sid_ref[0]})
+
     session = CallSession(
-        db, call, restaurant, stt, tts, llm, embedder, vector_db, send_audio, classifier_llm
+        db,
+        call,
+        restaurant,
+        stt,
+        tts,
+        llm,
+        embedder,
+        vector_db,
+        send_audio,
+        classifier_llm,
+        clear_audio,
     )
 
     try:
