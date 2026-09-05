@@ -90,6 +90,11 @@ _CONFIRM_WORDS = (
 )
 _DENY_WORDS = ("no", "nope", "not", "don't", "wrong", "change", "incorrect")
 
+# Phrases that contain a deny word but are not denials — several are
+# among the most common ways to say yes. Removed before the deny check,
+# so "sure, no problem" isn't read as a refusal.
+_AFFIRMATIVE_IDIOMS = ("no problem", "no worries", "no doubt", "why not")
+
 
 # Beyond this length, a reply that merely contains "yes" or "no" is
 # saying something of its own — see _handle_confirm_transfer.
@@ -128,8 +133,13 @@ _ABANDON_RESERVATION_PHRASES = (
 
 
 def _wants_out_of_reservation(message: str) -> bool:
-    lowered = message.lower()
-    return any(phrase in lowered for phrase in _ABANDON_RESERVATION_PHRASES)
+    """
+    Whole-word, not substring: "cancel" lives inside "cancellation", so
+    a caller mid-booking asking "what's your cancellation policy?" had
+    their half-finished reservation thrown away and their question
+    ignored. "stop" inside "non-stop" is the same trap.
+    """
+    return _says_any_of(message, _ABANDON_RESERVATION_PHRASES)
 
 
 def _says_any_of(message: str, phrases: tuple[str, ...]) -> bool:
@@ -145,6 +155,36 @@ def _says_any_of(message: str, phrases: tuple[str, ...]) -> bool:
     padded = f" {re.sub(r'[^a-z0-9 ]+', ' ', message.lower())} "
     padded = re.sub(r"\s+", " ", padded)
     return any(f" {re.sub(r'[^a-z0-9 ]+', ' ', phrase)} " in padded for phrase in phrases)
+
+
+def _reads_as(message: str) -> Optional[str]:
+    """
+    Whether a reply is a yes, a no, or neither — "confirm", "deny" or None.
+
+    Deny wins when both appear, because both appearing is what a refusal
+    looks like: "no, please don't" contains the confirm word "please",
+    and checking confirm first booked a table for a caller who had just
+    said not to. The two outcomes are not symmetric — a wrongly-heard
+    "no" costs a turn, a wrongly-heard "yes" creates a reservation the
+    caller never agreed to, or transfers a call they wanted to keep.
+
+    Affirmative idioms are stripped first so that precedence doesn't
+    swallow "sure, no problem", which is a yes.
+    """
+    lowered = message.lower()
+    said_idiom = False
+    for idiom in _AFFIRMATIVE_IDIOMS:
+        if idiom in lowered:
+            said_idiom = True
+            lowered = lowered.replace(idiom, " ")
+
+    if _says_any_of(lowered, _DENY_WORDS):
+        return "deny"
+    if _says_any_of(lowered, _CONFIRM_WORDS):
+        return "confirm"
+    # "no problem" and "why not" are whole answers on their own, and both
+    # mean yes. Stripping them without this would leave nothing to match.
+    return "confirm" if said_idiom else None
 
 # What to ask when offering a transfer (see _offer_transfer) — keyed by
 # the same reason strings should_escalate/classify_intent/unclear-count
@@ -495,7 +535,33 @@ class ConversationEngine:
 
         normalized = message.strip().lower()
 
-        if _says_any_of(normalized, _CONFIRM_WORDS):
+        # A longer reply may be changing a detail rather than answering
+        # the question — "yes, but can you make it 8 instead" contains
+        # "yes", and reading only that books the table at the time the
+        # caller was in the middle of correcting. This is the same guard
+        # _handle_confirm_transfer already had; its absence here was
+        # worse, because this branch writes a real reservation.
+        #
+        # So the reply is re-extracted first. If it moved any field, the
+        # new details get read back for confirmation instead of being
+        # booked silently; if it changed nothing, it's just a wordy yes
+        # or no and is treated as one.
+        if not _is_short_reply(normalized):
+            previous = context.reservation_draft
+            context.reservation_draft = await extract_reservation_fields(
+                self.llm,
+                self.restaurant.name,
+                context.reservation_draft,
+                message,
+                self.restaurant.timezone,
+                self._now(),
+            )
+            if context.reservation_draft != previous:
+                return self._advance_reservation_collection(context, acknowledge=True)
+
+        reading = _reads_as(normalized)
+
+        if reading == "confirm":
             reservation = await create_reservation_request(self.db, self.restaurant, context.reservation_draft, call_sid)
             context.state = ConversationState.IDENTIFY_INTENT
             context.reservation_draft = ReservationDraft()
@@ -512,7 +578,7 @@ class ConversationEngine:
             result.reservation = reservation
             return result
 
-        if _says_any_of(normalized, _DENY_WORDS):
+        if reading == "deny":
             context.state = ConversationState.RESERVATION_COLLECTING
             return self._say(context, "No problem — what would you like to change?")
 

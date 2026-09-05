@@ -14,6 +14,7 @@ from app.conversation.engine import ConversationEngine
 from app.conversation.state import ConversationContext, ConversationState
 from app.core.config import settings
 from app.services import knowledge_service
+from tests.dates import FUTURE_DATE
 from tests.fakes import ScriptedLLMProvider, contains
 
 
@@ -212,7 +213,7 @@ async def test_a_restaurant_can_opt_in_on_a_deployment_that_does_not_take_them(
                     {
                         "customer_name": None,
                         "customer_phone": None,
-                        "reservation_date": "2026-09-04",
+                        "reservation_date": FUTURE_DATE,
                         "reservation_time": "19:00",
                         "party_size": 4,
                         "special_notes": None,
@@ -233,7 +234,7 @@ async def test_a_restaurant_can_opt_in_on_a_deployment_that_does_not_take_them(
 async def test_full_reservation_flow_creates_a_real_reservation(db_session, vector_db, embedding_provider, restaurant):
     extraction_responses = iter(
         [
-            json.dumps({"customer_name": None, "customer_phone": None, "reservation_date": "2026-09-04", "reservation_time": "19:00", "party_size": 4, "special_notes": None}),
+            json.dumps({"customer_name": None, "customer_phone": None, "reservation_date": FUTURE_DATE, "reservation_time": "19:00", "party_size": 4, "special_notes": None}),
             json.dumps({"customer_name": "Jane Smith", "customer_phone": None, "reservation_date": None, "reservation_time": None, "party_size": None, "special_notes": None}),
             json.dumps({"customer_name": None, "customer_phone": "555-123-4567", "reservation_date": None, "reservation_time": None, "party_size": None, "special_notes": None}),
         ]
@@ -287,7 +288,7 @@ async def test_reservation_denial_returns_to_collecting(db_session, vector_db, e
             (contains("Respond with exactly one of these labels"), "RESERVATION"),
             (
                 contains("Extract reservation details"),
-                json.dumps({"customer_name": "Bob", "customer_phone": "5551234567", "reservation_date": "2026-09-04", "reservation_time": "19:00", "party_size": 2, "special_notes": None}),
+                json.dumps({"customer_name": "Bob", "customer_phone": "5551234567", "reservation_date": FUTURE_DATE, "reservation_time": "19:00", "party_size": 2, "special_notes": None}),
             ),
         ]
     )
@@ -695,7 +696,7 @@ async def test_a_caller_is_not_asked_for_the_number_they_are_calling_from(
                     {
                         "customer_name": None,
                         "customer_phone": None,
-                        "reservation_date": "2026-09-04",
+                        "reservation_date": FUTURE_DATE,
                         "reservation_time": "19:00",
                         "party_size": 4,
                         "special_notes": None,
@@ -739,7 +740,7 @@ async def test_a_caller_booking_on_someone_elses_behalf_can_still_correct_the_de
                     {
                         "customer_name": None,
                         "customer_phone": None,
-                        "reservation_date": "2026-09-04",
+                        "reservation_date": FUTURE_DATE,
                         "reservation_time": "19:00",
                         "party_size": 4,
                         "special_notes": None,
@@ -884,7 +885,7 @@ async def test_a_long_reply_starting_with_no_is_not_read_as_declining(
                     {
                         "customer_name": None,
                         "customer_phone": None,
-                        "reservation_date": "2026-09-04",
+                        "reservation_date": FUTURE_DATE,
                         "reservation_time": "19:00",
                         "party_size": None,
                         "special_notes": None,
@@ -936,3 +937,269 @@ async def test_a_short_yes_still_accepts_the_transfer(
 
     assert result.should_transfer is True
     assert result.transfer_reason == "order_request"
+
+
+# ----------------------------------------------------------------------
+# Reading a yes or a no
+#
+# These two branches decide whether a reservation gets written and
+# whether a call gets handed to a person, so a misread costs the caller
+# something real. Every case below is a phrasing that was mishandled.
+# ----------------------------------------------------------------------
+
+
+def test_a_refusal_containing_a_polite_word_is_not_a_confirmation():
+    """
+    "please" was a confirm word and confirm was tested before deny, so
+    "no, please don't" read as YES — booking a table for a caller who
+    had just said not to.
+    """
+    from app.conversation.engine import _reads_as
+
+    assert _reads_as("no, please don't") == "deny"
+    assert _reads_as("no please") == "deny"
+    assert _reads_as("no thanks") == "deny"
+    assert _reads_as("not yet") == "deny"
+
+
+def test_an_affirmative_idiom_containing_no_is_still_a_yes():
+    """The precedence above must not swallow the ways people say yes."""
+    from app.conversation.engine import _reads_as
+
+    assert _reads_as("sure, no problem") == "confirm"
+    assert _reads_as("no problem") == "confirm"
+    assert _reads_as("why not") == "confirm"
+    assert _reads_as("yes please") == "confirm"
+    assert _reads_as("please do") == "confirm"
+    assert _reads_as("go ahead") == "confirm"
+
+
+def test_an_utterance_that_is_neither_reads_as_neither():
+    from app.conversation.engine import _reads_as
+
+    assert _reads_as("what time did you say") is None
+    assert _reads_as("hmm") is None
+
+
+def test_asking_about_the_cancellation_policy_does_not_abandon_the_booking():
+    """
+    Substring matching put "cancel" inside "cancellation", so a caller
+    mid-booking who asked about the cancellation policy had their
+    half-finished reservation thrown away and their question ignored.
+    """
+    from app.conversation.engine import _wants_out_of_reservation
+
+    assert not _wants_out_of_reservation("what is your cancellation policy")
+    assert not _wants_out_of_reservation("a table for four")
+    # Genuine exits still work.
+    assert _wants_out_of_reservation("I need to cancel")
+    assert _wants_out_of_reservation("never mind")
+    assert _wants_out_of_reservation("actually I want to place an order instead")
+
+
+async def test_a_correction_during_confirmation_is_not_read_as_a_yes(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "yes, but can you make it 8 instead" contains "yes". Reading only
+    that booked the table at the time the caller was in the middle of
+    correcting — and wrote a real reservation row while doing it.
+
+    _handle_confirm_transfer already guarded against a long reply that
+    merely starts with yes; this branch, the one that writes to the
+    database, did not.
+    """
+    extraction_responses = iter(
+        [
+            json.dumps({"customer_name": "Jane Smith", "customer_phone": "555-123-4567",
+                        "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                        "party_size": 4, "special_notes": None}),
+            # The correction: 7pm becomes 8pm.
+            json.dumps({"customer_name": None, "customer_phone": None,
+                        "reservation_date": None, "reservation_time": "20:00",
+                        "party_size": None, "special_notes": None}),
+        ]
+    )
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), lambda _p: next(extraction_responses)),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "Table for four Friday at 7, Jane Smith, 555-123-4567")
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+
+    result = await engine.handle_turn(
+        context, "yes, but can you make it 8 instead", call_sid="CA_correction"
+    )
+
+    # Nothing booked on the turn that changed a detail.
+    assert result.reservation is None
+    # The new time is read back for confirmation, not silently applied.
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+    assert "8" in result.response_text
+    assert context.reservation_draft.reservation_time == "20:00"
+
+    from sqlalchemy import select
+
+    from app.db.models import Reservation
+
+    rows = await db_session.execute(
+        select(Reservation).where(Reservation.restaurant_id == restaurant.id)
+    )
+    assert rows.scalars().all() == []
+
+
+async def test_a_wordy_yes_that_changes_nothing_still_books(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """The guard above must not make a polite caller repeat themselves:
+    a long reply that moves no field is just a wordy yes."""
+    extraction_responses = iter(
+        [
+            json.dumps({"customer_name": "Jane Smith", "customer_phone": "555-123-4567",
+                        "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                        "party_size": 4, "special_notes": None}),
+            # Nothing new in "yes that all sounds right, thank you".
+            json.dumps({"customer_name": None, "customer_phone": None,
+                        "reservation_date": None, "reservation_time": None,
+                        "party_size": None, "special_notes": None}),
+        ]
+    )
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), lambda _p: next(extraction_responses)),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+
+    await engine.handle_turn(context, "Table for four Friday at 7, Jane Smith, 555-123-4567")
+    result = await engine.handle_turn(
+        context, "yes that all sounds right, thank you very much", call_sid="CA_wordy"
+    )
+
+    assert result.reservation is not None
+    assert result.reservation.customer_name == "Jane Smith"
+
+
+# ----------------------------------------------------------------------
+# A second restaurant on the same deployment
+#
+# The engine must behave identically for a business whose content,
+# cuisine, timezone and settings are nothing like the first one's.
+# Onboarding a client is a data change, so a data change must not be
+# able to alter the conversation logic — or to leak one restaurant's
+# answers into another's call.
+# ----------------------------------------------------------------------
+
+
+async def _second_restaurant(db_session):
+    from app.db.models import Restaurant as RestaurantModel
+    from app.db.models import RestaurantHours
+
+    r = RestaurantModel(
+        name="Trattoria Nova",
+        timezone="Europe/Rome",              # different timezone
+        phone_number="+390612345678",
+        email="owner@trattorianova.example",
+        transfer_number="+390698765432",
+        stt_vocabulary="carbonara, amatriciana, arancini, burrata",
+        takes_reservations=True,
+        is_active=True,
+    )
+    db_session.add(r)
+    await db_session.flush()
+    for day in range(7):
+        db_session.add(
+            RestaurantHours(
+                restaurant_id=r.id, day_of_week=day, opening_time="12:00", closing_time="23:30"
+            )
+        )
+    await db_session.commit()
+    await db_session.refresh(r)
+    return r
+
+
+async def test_a_second_restaurants_call_uses_its_own_knowledge_only(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    other = await _second_restaurant(db_session)
+
+    await knowledge_service.create_document(
+        db_session, vector_db, embedding_provider, restaurant.id, "Seating",
+        "Do you have outdoor seating? Yes, we have outdoor seating on our patio.", "policy", None,
+    )
+    await knowledge_service.create_document(
+        db_session, vector_db, embedding_provider, other.id, "Seating",
+        "Do you have outdoor seating? Yes, we have outdoor seating in our courtyard.", "policy", None,
+    )
+    await db_session.commit()
+
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "FAQ"),
+            (contains("using ONLY the information below"),
+             lambda prompt: "courtyard" if "courtyard" in prompt else "WRONG RESTAURANT"),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, other)
+    context = ConversationContext(restaurant_id=other.id)
+
+    result = await engine.handle_turn(context, "Do you have outdoor seating?")
+
+    # Grounded in its OWN document; the other restaurant's patio never
+    # reaches the prompt.
+    assert "courtyard" in result.response_text
+    faq_prompts = [c for c in llm.calls if "using ONLY the information below" in c]
+    assert faq_prompts and "patio" not in faq_prompts[0]
+
+
+async def test_the_yes_no_fixes_hold_for_a_second_restaurant(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """The confirm/deny reading is a property of the conversation logic,
+    not of whose menu is loaded — so it must behave the same here."""
+    other = await _second_restaurant(db_session)
+
+    extraction_responses = iter(
+        [
+            json.dumps({"customer_name": "Marco Rossi", "customer_phone": "555-987-6543",
+                        "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                        "party_size": 2, "special_notes": None}),
+        ]
+    )
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), lambda _p: next(extraction_responses)),
+        ]
+    )
+    engine = _engine(llm, embedding_provider, vector_db, db_session, other)
+    context = ConversationContext(restaurant_id=other.id)
+
+    await engine.handle_turn(context, "Table for two Friday at 7, Marco Rossi, 555-987-6543")
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+
+    # The refusal that used to book a table, on this restaurant too.
+    result = await engine.handle_turn(context, "no, please don't", call_sid="CA_other")
+
+    assert result.reservation is None
+    assert context.state == ConversationState.RESERVATION_COLLECTING
+
+    from sqlalchemy import select
+
+    from app.db.models import Reservation
+
+    rows = await db_session.execute(
+        select(Reservation).where(Reservation.restaurant_id == other.id)
+    )
+    assert rows.scalars().all() == []

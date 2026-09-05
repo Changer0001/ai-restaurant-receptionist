@@ -17,6 +17,7 @@ from app.conversation.state import ConversationState
 from app.db.models import CallOutcomeEnum
 from app.services import call_service
 from app.voice.session import CallSession, _is_prompt_echo, _split_into_speakable_chunks
+from tests.dates import FUTURE_DATE
 from tests.fakes import FakeTTSProvider, ScriptedLLMProvider, ScriptedSTTProvider, contains
 
 
@@ -180,7 +181,7 @@ async def test_full_reservation_flow_creates_reservation_and_sets_outcome(
                 {
                     "customer_name": "Jane Smith",
                     "customer_phone": "555-123-4567",
-                    "reservation_date": "2026-09-04",
+                    "reservation_date": FUTURE_DATE,
                     "reservation_time": "19:00",
                     "party_size": 4,
                     "special_notes": None,

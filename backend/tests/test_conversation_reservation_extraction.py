@@ -5,6 +5,7 @@ from datetime import datetime
 
 from app.conversation.reservation_extraction import extract_reservation_fields
 from app.conversation.state import ReservationDraft
+from tests.dates import FUTURE_DATE
 from tests.fakes import ScriptedLLMProvider
 
 _NOW = datetime(2026, 8, 30)  # a Sunday
@@ -17,7 +18,7 @@ async def test_extracts_all_fields_from_one_message():
             {
                 "customer_name": "Jane Smith",
                 "customer_phone": "555-123-4567",
-                "reservation_date": "2026-09-04",
+                "reservation_date": FUTURE_DATE,
                 "reservation_time": "19:00",
                 "party_size": 4,
                 "special_notes": None,
@@ -28,7 +29,7 @@ async def test_extracts_all_fields_from_one_message():
 
     assert draft.customer_name == "Jane Smith"
     assert draft.customer_phone == "555-123-4567"
-    assert draft.reservation_date == "2026-09-04"
+    assert draft.reservation_date == FUTURE_DATE
     assert draft.reservation_time == "19:00"
     assert draft.party_size == 4
     assert draft.is_complete()
@@ -36,14 +37,14 @@ async def test_extracts_all_fields_from_one_message():
 
 async def test_merges_incrementally_across_turns():
     llm = ScriptedLLMProvider([], default=json.dumps({"customer_name": "Ada", "party_size": None}))
-    partial = ReservationDraft(reservation_date="2026-09-04", reservation_time="19:00", party_size=2)
+    partial = ReservationDraft(reservation_date=FUTURE_DATE, reservation_time="19:00", party_size=2)
 
     draft = await extract_reservation_fields(llm, "Test Bistro", partial, "It's under Ada", "America/New_York", _NOW)
 
     # New field merged in, existing fields preserved (extraction response
     # omits date/time/party_size — those must not be wiped out).
     assert draft.customer_name == "Ada"
-    assert draft.reservation_date == "2026-09-04"
+    assert draft.reservation_date == FUTURE_DATE
     assert draft.reservation_time == "19:00"
     assert draft.party_size == 2
 
