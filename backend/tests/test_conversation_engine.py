@@ -1203,3 +1203,94 @@ async def test_the_yes_no_fixes_hold_for_a_second_restaurant(
         select(Reservation).where(Reservation.restaurant_id == other.id)
     )
     assert rows.scalars().all() == []
+
+
+# ----------------------------------------------------------------------
+# Reading a yes or a no the word list has never seen
+# ----------------------------------------------------------------------
+
+
+async def _at_confirmation(db_session, vector_db, embedding_provider, restaurant, llm):
+    """Drive a call to RESERVATION_CONFIRMING and hand back the context."""
+    engine = _engine(llm, embedding_provider, vector_db, db_session, restaurant)
+    context = ConversationContext(restaurant_id=restaurant.id)
+    await engine.handle_turn(context, "Table for four Friday at 7, Jane Smith, 555-123-4567")
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+    return engine, context
+
+
+def _reservation_llm(extra_rules=()):
+    responses = iter(
+        [
+            json.dumps({"customer_name": "Jane Smith", "customer_phone": "555-123-4567",
+                        "reservation_date": FUTURE_DATE, "reservation_time": "19:00",
+                        "party_size": 4, "special_notes": None}),
+            json.dumps({"customer_name": None, "customer_phone": None,
+                        "reservation_date": None, "reservation_time": None,
+                        "party_size": None, "special_notes": None}),
+        ]
+    )
+    return ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "RESERVATION"),
+            (contains("Extract reservation details"), lambda _p: next(responses)),
+            *extra_rules,
+        ]
+    )
+
+
+async def test_an_agreement_no_word_list_knows_is_still_understood(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    "go on then" is agreement. No list of confirm words contains it, and
+    every list that tried grew a new gap for the next phrasing. It now
+    goes to the classifier instead of costing the caller a repeated
+    question.
+    """
+    llm = _reservation_llm([(contains("The assistant asked"), "YES")])
+    engine, context = await _at_confirmation(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    result = await engine.handle_turn(context, "go on then", call_sid="CA_indirect")
+
+    assert result.reservation is not None
+    assert any("The assistant asked" in call for call in llm.calls)
+
+
+async def test_an_ordinary_yes_never_reaches_the_classifier(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """The fallback must not put a network call on the common path — the
+    replies people actually give are answered without one."""
+    llm = _reservation_llm([(contains("The assistant asked"), "SHOULD_NOT_BE_CALLED")])
+    engine, context = await _at_confirmation(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    result = await engine.handle_turn(context, "yes please", call_sid="CA_fast")
+
+    assert result.reservation is not None
+    assert not any("The assistant asked" in call for call in llm.calls)
+
+
+async def test_a_classifier_that_fails_never_books(
+    db_session, vector_db, embedding_provider, restaurant
+):
+    """
+    The failure direction is fixed. An unreadable classification asks the
+    caller again; it must never be resolved in favour of the action that
+    cannot be undone.
+    """
+    llm = _reservation_llm([(contains("The assistant asked"), "banana")])
+    engine, context = await _at_confirmation(
+        db_session, vector_db, embedding_provider, restaurant, llm
+    )
+
+    result = await engine.handle_turn(context, "mmm hold on a sec", call_sid="CA_garbage")
+
+    assert result.reservation is None
+    assert context.state == ConversationState.RESERVATION_CONFIRMING
+    assert result.response_text.rstrip().endswith("?")

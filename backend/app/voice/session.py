@@ -310,7 +310,18 @@ class CallSession:
                 if result.transfer_reason in self._ROUTINE_TRANSFER_REASONS
                 else CallOutcomeEnum.HUMAN_ESCALATION
             )
-        elif self.final_outcome == CallOutcomeEnum.UNKNOWN:
+        elif (
+            self.final_outcome == CallOutcomeEnum.UNKNOWN
+            and self.context.answered_something
+        ):
+            # Only once something was actually answered. Any completed
+            # turn used to count, so a caller who said "hello" and hung
+            # up, one whose question the knowledge base couldn't cover,
+            # and one who was asked to repeat themselves twice were all
+            # filed as FAQ_ANSWERED — which is the number the dashboard
+            # reports as the AI doing its job. The engine already tracks
+            # the honest version of this: answered_something is set where
+            # a real answer is given, and nowhere else.
             self.final_outcome = CallOutcomeEnum.FAQ_ANSWERED
 
     async def _speak(self, text: str) -> None:

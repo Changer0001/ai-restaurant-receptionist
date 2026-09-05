@@ -1,0 +1,17 @@
+The assistant asked the caller a yes-or-no question on a phone call. Decide whether the caller's reply agreed, declined, or did neither.
+
+The assistant asked: {question}
+
+The caller replied: {latest_message}
+
+Respond with exactly one word:
+
+YES - they agreed, accepted, or told you to go ahead. Includes indirect agreement: "go on then", "that works", "sounds right", "please do", "why not", "if you would".
+NO - they declined, disagreed, or want something changed. Includes indirect refusal: "I'd rather not", "hold off", "let's leave it", "actually, hang on", "that's not right".
+UNCLEAR - anything else: a question back, a change of subject, an unrelated request, or a reply too garbled to read either way.
+
+Judge only this reply, against that question. Do not guess what would be convenient.
+
+When you are unsure, answer UNCLEAR. Saying so costs one extra question; guessing YES books a table or transfers a call the caller never agreed to.
+
+Answer:

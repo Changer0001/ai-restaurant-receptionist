@@ -415,3 +415,43 @@ async def test_a_restaurant_without_its_own_vocabulary_gets_the_default(
     await session._process_utterance()
 
     assert stt.vocabularies == [settings.STT_INITIAL_PROMPT]
+
+
+# ----------------------------------------------------------------------
+# What the call gets recorded as
+#
+# The outcome is what the dashboard counts, so an over-generous one is
+# not a cosmetic problem — it reports the AI succeeding at calls it
+# didn't.
+# ----------------------------------------------------------------------
+
+
+async def test_a_call_where_nothing_was_answered_is_not_recorded_as_answered(
+    db_session, restaurant, vector_db, embedding_provider
+):
+    """
+    Any completed turn used to count as FAQ_ANSWERED, so a caller who
+    only said hello — or whose question the knowledge base couldn't
+    cover — was filed as a question successfully answered.
+    """
+    llm = ScriptedLLMProvider(
+        [
+            (contains("decide if it needs to be handed off"), "NO"),
+            (contains("Respond with exactly one of these labels"), "SMALLTALK"),
+        ]
+    )
+    stt = ScriptedSTTProvider([("Hello, how are you doing today?", 0.9)])
+    session, _sender = await _make_session(
+        db_session, restaurant, vector_db, embedding_provider, llm, stt
+    )
+    session.turn_detector.pop_utterance = lambda: _fake_audio_frame()
+
+    await session._process_utterance()
+
+    assert session.final_outcome == CallOutcomeEnum.UNKNOWN
+    assert session.context.answered_something is False
+
+    # And an abandoned call is what it actually was.
+    await session.end()
+    await db_session.commit()
+    assert session.call.outcome == CallOutcomeEnum.CALL_ABANDONED

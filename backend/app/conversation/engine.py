@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.conversation import hours_answer, smalltalk
+from app.conversation.confirmation import read_confirmation
 from app.conversation.escalation import should_escalate
 from app.conversation.intent import classify_intent
 from app.conversation.phrasing import pick
@@ -159,7 +160,12 @@ def _says_any_of(message: str, phrases: tuple[str, ...]) -> bool:
 
 def _reads_as(message: str) -> Optional[str]:
     """
-    Whether a reply is a yes, a no, or neither — "confirm", "deny" or None.
+    The fast path for reading a yes or a no — "confirm", "deny" or None.
+
+    None means "this list doesn't recognize it", NOT "the caller said
+    neither". The engine sends those on to the classifier model (see
+    _read_yes_no); this only ever answers when it is sure, because the
+    set of ways to say yes on a phone has no edge a word list can reach.
 
     Deny wins when both appear, because both appearing is what a refusal
     looks like: "no, please don't" contains the confirm word "please",
@@ -259,6 +265,28 @@ class ConversationEngine:
 
     def _now(self) -> datetime:
         return datetime.now(ZoneInfo(self.restaurant.timezone))
+
+    async def _read_yes_no(
+        self, context: ConversationContext, message: str
+    ) -> Optional[str]:
+        """
+        Whether the caller agreed, declined, or neither.
+
+        The word lists answer the common replies with no network call at
+        all. Anything they don't recognize goes to the classifier rather
+        than being treated as a non-answer — that fallback replaces a
+        turn the caller would otherwise have spent being asked the same
+        question again, so it costs nothing in practice and closes the
+        gap a fixed list can never close. See confirmation.py.
+        """
+        fast = _reads_as(message)
+        if fast is not None:
+            return fast
+
+        asked = context.last_assistant_text()
+        if not asked:
+            return None
+        return await read_confirmation(self.classifier_llm, asked, message)
 
     def _collects_reservations(self) -> bool:
         """
@@ -559,7 +587,7 @@ class ConversationEngine:
             if context.reservation_draft != previous:
                 return self._advance_reservation_collection(context, acknowledge=True)
 
-        reading = _reads_as(normalized)
+        reading = await self._read_yes_no(context, normalized)
 
         if reading == "confirm":
             reservation = await create_reservation_request(self.db, self.restaurant, context.reservation_draft, call_sid)
@@ -650,14 +678,16 @@ class ConversationEngine:
         # sure that if we arrive early" was heard as "yes" and the
         # question was never answered.
         if _is_short_reply(normalized):
-            if _says_any_of(normalized, _CONFIRM_WORDS):
+            reading = await self._read_yes_no(context, normalized)
+
+            if reading == "confirm":
                 reason = context.transfer_reason
                 context.state = ConversationState.TRANSFER_TO_HUMAN
                 text = "Okay, connecting you now."
                 context.add_turn("assistant", text)
                 return TurnResult(response_text=text, state=context.state, should_transfer=True, transfer_reason=reason)
 
-            if _says_any_of(normalized, _DENY_WORDS):
+            if reading == "deny":
                 context.state = ConversationState.IDENTIFY_INTENT
                 context.transfer_reason = None
                 # A fresh start on identifying what they need — the UNCLEAR
