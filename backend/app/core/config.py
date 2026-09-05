@@ -384,6 +384,11 @@ class Settings(BaseSettings):
     # is cut off by nothing is worse than one where it can't be
     # interrupted at all.
     FEATURE_BARGE_IN: bool = True
+    # Load Whisper and Kokoro at startup rather than on the first
+    # call. Off is only sensible where startup time matters more than
+    # the first caller's experience — a machine that restarts often
+    # and takes few calls. See app/voice/warmup.py.
+    WARM_SPEECH_MODELS_ON_STARTUP: bool = True
     # True: the AI collects reservation details itself (name, phone,
     # date, time, party size) and creates a real pending Reservation
     # row — for a restaurant whose staff actually checks and confirms

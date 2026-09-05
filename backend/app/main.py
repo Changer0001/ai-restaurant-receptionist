@@ -22,6 +22,7 @@ from app.core.cache import close_redis, init_redis
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import async_session_maker, engine
+from app.voice.warmup import schedule_warmup
 
 # Configure structured logging
 logging.basicConfig(
@@ -53,10 +54,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
     await init_redis()
 
+    # Whisper and Kokoro load lazily, which on a phone line means the
+    # first caller after a restart hears silence on an answered call
+    # while they load — measured at ~14s. Warming in the background
+    # so startup isn't delayed; see app/voice/warmup.py.
+    warmup_task = schedule_warmup()
+
     yield
 
     # Shutdown
     logger.info("Shutting down AI Restaurant Receptionist API")
+    # A warmup still in flight at shutdown has nobody to serve.
+    warmup_task.cancel()
     await close_redis()
     await engine.dispose()
 
