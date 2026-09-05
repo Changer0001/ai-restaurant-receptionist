@@ -124,27 +124,69 @@ else
     echo "$TWILIO_NUMBER" > "$NUMBER_CACHE"
   fi
 
-  # Captured separately from the grep/sed pipeline (rather than piped
-  # straight in) for two reasons: so the raw response is available to
-  # print if the lookup fails, and so a no-match grep (exit 1) can't
-  # abort the whole script under `set -e -o pipefail` — hit live,
-  # silently killing this script (including its EXIT trap tearing down
-  # ngrok) right after printing the cached phone number, before ever
-  # reaching the "Could not find" fallback below or starting uvicorn.
-  PHONE_LOOKUP_RESPONSE="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-    "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PhoneNumber=$TWILIO_NUMBER")"
-  PHONE_SID="$(echo "$PHONE_LOOKUP_RESPONSE" | grep -o '"sid":"[^"]*"' | head -1 | sed 's/"sid":"//;s/"$//' || true)"
+  # The whole number list is fetched and matched locally, rather than
+  # asking Twilio to filter with ?PhoneNumber=... — because a literal "+"
+  # in a query string means a space, so an E.164 number sent that way
+  # asks Twilio for " 18304536218" and matches nothing.
+  #
+  # Hit live, and it failed in the most misleading way available: the
+  # script printed "Could not find +18304536218 on this Twilio account"
+  # and then, one line later, listed that exact number as being on the
+  # account. The webhook silently went un-updated, so the next call
+  # reached the pre-reboot ngrok URL and Twilio played "an application
+  # error has occurred" to the caller.
+  #
+  # Matching on digits also makes the cached number tolerant of how it
+  # was typed. The suffix comparison is what lets a number written
+  # without its country code — (830) 453-6218 — match the E.164
+  # +18304536218 Twilio stores; ten digits minimum, so a short string
+  # can't match several numbers at once.
+  #
+  # Captured into a variable rather than piped straight through so the
+  # raw response is available if parsing fails, and so a no-match can't
+  # abort the whole script under `set -e -o pipefail` — that aborted it
+  # once before, taking the EXIT trap's ngrok teardown with it.
+  NUMBERS_JSON="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
+    "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PageSize=20")"
+
+  PHONE_SID="$(python3 -c "
+import json, re, sys
+
+def matches(a, b):
+    a, b = re.sub(r'\D', '', a), re.sub(r'\D', '', b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # One written without its country code. Ten digits minimum so a
+    # short fragment can't match more than one of the account's numbers.
+    longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+    return len(shorter) >= 10 and longer.endswith(shorter)
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for entry in data.get('incoming_phone_numbers', []):
+    if matches(sys.argv[1], entry.get('phone_number', '')):
+        print(entry['sid'])
+        break
+" "$TWILIO_NUMBER" <<< "$NUMBERS_JSON" || true)"
 
   if [ -z "$PHONE_SID" ]; then
     echo "    Could not find $TWILIO_NUMBER on this Twilio account."
-    # An exact-match lookup returning nothing says only "not this
-    # number", which leaves you guessing whether the number is on a
-    # different account, or just stored in a different format. Listing
-    # what IS on the account answers that in one line, and gives you the
-    # value to re-run with: ./scripts/full-restart.sh +1XXXXXXXXXX
-    ALL_NUMBERS="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" \
-      "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers.json?PageSize=20" \
-      | grep -o '"phone_number": *"[^"]*"' | sed 's/.*: *"//;s/"$//' || true)"
+    # Listing what IS on the account distinguishes "wrong number" from
+    # "wrong account" in one line, and gives you the value to re-run
+    # with: ./scripts/full-restart.sh +1XXXXXXXXXX
+    ALL_NUMBERS="$(python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for entry in data.get('incoming_phone_numbers', []):
+    print(entry.get('phone_number', ''))
+" <<< "$NUMBERS_JSON" || true)"
 
     if [ -n "$ALL_NUMBERS" ]; then
       echo "    Numbers on this account:"
@@ -159,13 +201,52 @@ else
     echo "    Meanwhile, paste this into Twilio Console -> Phone Numbers ->"
     echo "    your number -> Voice Configuration -> 'A call comes in':"
     echo "    $VOICE_WEBHOOK_URL"
+    WEBHOOK_OK=""
   else
-    curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" -X POST \
+    # The response is read back rather than discarded, and the URL Twilio
+    # reports is compared with the one we sent. An unverified write here
+    # is worse than no write: the app starts, everything looks healthy,
+    # and the failure only shows up as Twilio reading "an application
+    # error has occurred" to a real caller, with nothing in this log.
+    UPDATE_RESPONSE="$(curl -sS -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" -X POST \
       "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
       --data-urlencode "VoiceUrl=$VOICE_WEBHOOK_URL" \
-      --data-urlencode "VoiceMethod=POST" >/dev/null
-    echo "    Twilio voice webhook updated automatically: $VOICE_WEBHOOK_URL"
+      --data-urlencode "VoiceMethod=POST")"
+
+    STORED_URL="$(python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('voice_url') or '')
+except Exception:
+    print('')
+" <<< "$UPDATE_RESPONSE" || true)"
+
+    if [ "$STORED_URL" = "$VOICE_WEBHOOK_URL" ]; then
+      echo "    Twilio voice webhook updated and verified: $VOICE_WEBHOOK_URL"
+      WEBHOOK_OK=1
+    else
+      echo "    WARNING: Twilio accepted the update but reports a different URL."
+      echo "      sent:     $VOICE_WEBHOOK_URL"
+      echo "      reported: ${STORED_URL:-<none>}"
+      WEBHOOK_OK=""
+    fi
   fi
+fi
+
+# A running app with a stale webhook is the failure mode that wastes a
+# real phone call to discover, so it gets said last — right above the
+# uvicorn output, not scrolled off the top of a long startup log.
+if [ -z "${WEBHOOK_OK:-}" ]; then
+  echo ""
+  echo "  ###################################################################"
+  echo "  #  TWILIO IS NOT POINTED AT THIS TUNNEL.                          #"
+  echo "  #  The app below will start and look healthy, but an incoming     #"
+  echo "  #  call will hear \"an application error has occurred\".            #"
+  echo "  #                                                                 #"
+  echo "  #  Fix it in another terminal, without restarting:                #"
+  echo "  #      ./scripts/set-twilio-webhook.sh                            #"
+  echo "  ###################################################################"
+  echo ""
 fi
 
 # --- Free port 8010 -------------------------------------------------------
