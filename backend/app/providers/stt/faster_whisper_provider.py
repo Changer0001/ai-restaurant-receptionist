@@ -34,6 +34,7 @@ class FasterWhisperSTTProvider(STTProvider):
         initial_prompt: str = settings.STT_INITIAL_PROMPT,
         beam_size: int = settings.WHISPER_BEAM_SIZE,
         cpu_threads: int = settings.WHISPER_CPU_THREADS,
+        no_speech_threshold: float = settings.WHISPER_NO_SPEECH_THRESHOLD,
     ):
         """
         Initialize Faster-Whisper provider.
@@ -47,6 +48,8 @@ class FasterWhisperSTTProvider(STTProvider):
                 this restaurant's dish names — see STT_INITIAL_PROMPT.
             beam_size: Decode beam width; 1 is greedy and much faster.
             cpu_threads: 0 lets CTranslate2 pick.
+            no_speech_threshold: segments Whisper is this sure contain
+                no speech are dropped — see WHISPER_NO_SPEECH_THRESHOLD.
         """
         self.model_size = model_size
         self.device = device
@@ -54,6 +57,7 @@ class FasterWhisperSTTProvider(STTProvider):
         self.initial_prompt = initial_prompt
         self.beam_size = beam_size
         self.cpu_threads = cpu_threads
+        self.no_speech_threshold = no_speech_threshold
         self.model: WhisperModel | None = None
 
     async def _load_model(self) -> WhisperModel:
@@ -134,6 +138,21 @@ class FasterWhisperSTTProvider(STTProvider):
             confidences = []
 
             for segment in segments:
+                # no_speech_prob is Whisper's own answer to "was anything
+                # said here", and it is a different question from "how
+                # sure am I of the words". Dropping the segment on this
+                # signal is what the signal is for; judging it by
+                # avg_logprob instead does not work, because on real
+                # calls the two classes invert — "hello." scored 0.33 and
+                # "six." 0.44 while the genuine noise "Fiyopas." scored
+                # 0.42. No threshold on avg_logprob separates those.
+                if segment.no_speech_prob > self.no_speech_threshold:
+                    logger.debug(
+                        f"Dropping non-speech segment: {segment.text.strip()[:40]!r} "
+                        f"(no_speech_prob={segment.no_speech_prob:.2f})"
+                    )
+                    continue
+
                 text_parts.append(segment.text)
                 # Segment has no .confidence attribute — avg_logprob is
                 # the average per-token log-probability faster-whisper
@@ -141,13 +160,22 @@ class FasterWhisperSTTProvider(STTProvider):
                 # roughly-[0,1]-scaled confidence proxy (a standard
                 # approach for Whisper-family models, not an exact
                 # calibrated probability).
+                #
+                # Kept, but as a weak backstop only: see
+                # STT_MIN_CONFIDENCE for why it cannot be the primary
+                # filter, and note that it runs low on short utterances —
+                # a one-word answer is exactly where a phone call needs
+                # it least.
                 confidences.append(math.exp(segment.avg_logprob))
 
             transcribed_text = " ".join(text_parts).strip()
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
 
+            # Both signals, so a live call produces the data to calibrate
+            # against rather than another round of guessing.
             logger.debug(
-                f"Transcribed: {transcribed_text[:100]}... (confidence: {avg_confidence:.2f})"
+                f"Transcribed: {transcribed_text[:100]!r} "
+                f"(confidence={avg_confidence:.2f}, segments={len(confidences)})"
             )
 
             return transcribed_text, avg_confidence

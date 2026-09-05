@@ -464,10 +464,17 @@ async def test_a_call_where_nothing_was_answered_is_not_recorded_as_answered(
 # ----------------------------------------------------------------------
 # Audio too poor to act on
 #
-# Whisper always returns its best guess. A real call answered "Fiyopas."
-# (confidence 0.42) and "free of us" (0.41) with confident replies to
-# things the caller never said — the confidence was in the log the whole
-# time and nothing read it.
+# Two filters, doing different jobs. The provider drops segments Whisper
+# itself reports as non-speech (no_speech_prob) — that is what caught
+# "Fiyopas." and "free of us", and it is tested in test_stt_confidence.py.
+# What is tested HERE is the session's backstop for a transcript that
+# arrives with almost no confidence at all, and what the caller hears
+# when it fires.
+#
+# The values below are deliberately far under STT_MIN_CONFIDENCE: real
+# short speech scores as low as 0.33 ("hello." on a live call), so a test
+# using 0.42 would be asserting the behaviour that made a caller repeat
+# the word "six".
 # ----------------------------------------------------------------------
 
 
@@ -475,7 +482,7 @@ async def test_a_low_confidence_transcript_is_not_acted_on(
     db_session, restaurant, vector_db, embedding_provider
 ):
     llm = ScriptedLLMProvider([], default="SHOULD_NOT_BE_CALLED")
-    stt = ScriptedSTTProvider([("Fiyopas.", 0.42)])
+    stt = ScriptedSTTProvider([("brrzt", 0.05)])
     session, sender = await _make_session(
         db_session, restaurant, vector_db, embedding_provider, llm, stt
     )
@@ -523,7 +530,7 @@ async def test_repeated_unintelligible_audio_hands_over_to_a_person(
     gives up on the whole system rather than on the connection.
     """
     llm = ScriptedLLMProvider([], default="SHOULD_NOT_BE_CALLED")
-    stt = ScriptedSTTProvider([("Fiyopas.", 0.42), ("free of us", 0.41), ("mmhm", 0.30)])
+    stt = ScriptedSTTProvider([("brrzt", 0.05), ("kkhh", 0.03), ("mmhm", 0.08)])
     session, _sender = await _make_session(
         db_session, restaurant, vector_db, embedding_provider, llm, stt
     )
@@ -549,7 +556,7 @@ async def test_one_bad_turn_does_not_count_against_a_later_one(
         ]
     )
     stt = ScriptedSTTProvider(
-        [("Fiyopas.", 0.42), ("What time do you close tonight?", 0.9), ("blorp", 0.30)]
+        [("brrzt", 0.05), ("What time do you close tonight?", 0.9), ("blorp", 0.04)]
     )
     session, _sender = await _make_session(
         db_session, restaurant, vector_db, embedding_provider, llm, stt

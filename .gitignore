@@ -88,3 +88,8 @@ Thumbs.db
 *.key
 *.pem
 *.crt
+
+# Autonomous engineering loop scratch output. ENGINEERING_LOG.md IS
+# committed — it is the persistent memory across sessions — but the raw
+# captured output it summarizes is regenerated on every run.
+.claude/test-output.log

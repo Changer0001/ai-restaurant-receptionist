@@ -143,22 +143,31 @@ class Settings(BaseSettings):
     # is wrong for this machine.
     WHISPER_CPU_THREADS: int = 0
 
-    # Below this confidence, a transcript is treated as "didn't catch
-    # that" rather than as something the caller said.
+    # How sure Whisper must be that a segment contains NO speech before
+    # it is thrown away. This is the primary filter for line noise, and
+    # it is the signal Whisper produces for exactly this question.
+    # 0.6 is faster-whisper's own default for the equivalent internal
+    # check. Raise it if real speech is being dropped; lower it if noise
+    # is getting through.
+    WHISPER_NO_SPEECH_THRESHOLD: float = 0.6
+
+    # A last-resort floor on transcript confidence, NOT the main filter.
     #
-    # Whisper always returns its best guess, however poor the audio, and
-    # that guess reaches the engine as though it were speech. On a real
-    # call it produced "Fiyopas." at 0.42 and "free of us" at 0.41 — both
-    # were classified, retrieved against, and answered, which is how a
-    # caller ends up hearing a confident reply to something they never
-    # said. The confidence was right there in the log and nothing used it.
+    # It used to be the main filter, at 0.45, and it was wrong. The
+    # confidence here is exp(avg_logprob), which runs low on short
+    # utterances — precisely the one-word answers a phone call is made
+    # of. On real calls the two classes invert outright: the genuine
+    # "hello." scored 0.33, "tikka, faafel." 0.35 and "six." 0.44, while
+    # the actual noise "free of us" scored 0.41 and "Fiyopas." 0.42. A
+    # caller answering "how many of you?" with "six" was asked to repeat
+    # themselves. No threshold on this signal can separate those classes,
+    # so the job moved to WHISPER_NO_SPEECH_THRESHOLD above.
     #
-    # 0.45 sits below the 0.5-0.6 that real, correctly-transcribed short
-    # replies score on a phone line ("yes." came back at 0.58, "yeah" at
-    # 0.50) and above the 0.40-0.42 of the genuine nonsense. Raise it if
-    # callers are asked to repeat themselves too often; lower it if
-    # garbled text is still getting through.
-    STT_MIN_CONFIDENCE: float = 0.45
+    # 0.25 sits below every real utterance observed and above silence,
+    # which returns 0.0. Anything garbled that still gets through is
+    # handled downstream: intent classification returns UNCLEAR, and two
+    # UNCLEAR turns in a row offer the caller a person.
+    STT_MIN_CONFIDENCE: float = 0.25
 
     # FALLBACK vocabulary hint passed to Whisper as its decoder prefix.
     # Whisper biases toward spellings it has just "seen", so listing the
